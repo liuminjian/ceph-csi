@@ -20,13 +20,14 @@ package fake
 import (
 	"context"
 
-	rbdv1 "github.com/ceph/ceph-csi/api/rbd/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	labels "k8s.io/apimachinery/pkg/labels"
-	schema "k8s.io/apimachinery/pkg/runtime/schema"
-	types "k8s.io/apimachinery/pkg/types"
-	watch "k8s.io/apimachinery/pkg/watch"
-	testing "k8s.io/client-go/testing"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/testing"
+
+	rbdv1 "github.com/ceph/ceph-csi/api/rbd/v1"
 )
 
 // FakeRBDRestores implements RBDRestoreInterface

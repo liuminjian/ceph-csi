@@ -18,14 +18,15 @@ limitations under the License.
 package fake
 
 import (
-	clientset "github.com/ceph/ceph-csi/internal/client/clientset/versioned"
-	rbdv1 "github.com/ceph/ceph-csi/internal/client/clientset/versioned/typed/rbd/v1"
-	fakerbdv1 "github.com/ceph/ceph-csi/internal/client/clientset/versioned/typed/rbd/v1/fake"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/testing"
+
+	"github.com/ceph/ceph-csi/pkg/client/clientset/versioned"
+	"github.com/ceph/ceph-csi/pkg/client/clientset/versioned/typed/rbd/v1"
+	"github.com/ceph/ceph-csi/pkg/client/clientset/versioned/typed/rbd/v1/fake"
 )
 
 // NewSimpleClientset returns a clientset that will respond with the provided objects.
@@ -73,9 +74,9 @@ func (c *Clientset) Tracker() testing.ObjectTracker {
 	return c.tracker
 }
 
-var _ clientset.Interface = &Clientset{}
+var _ versioned.Interface = &Clientset{}
 
 // RbdV1 retrieves the RbdV1Client
-func (c *Clientset) RbdV1() rbdv1.RbdV1Interface {
-	return &fakerbdv1.FakeRbdV1{Fake: &c.Fake}
+func (c *Clientset) RbdV1() v1.RbdV1Interface {
+	return &fake.FakeRbdV1{Fake: &c.Fake}
 }

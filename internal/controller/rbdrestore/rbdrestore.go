@@ -11,7 +11,6 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -175,7 +174,7 @@ func (r *ReconcileRBDRestore) buildVolumeRestoreArgs(restoreSrc string, pool str
 
 func (r *ReconcileRBDRestore) UpdateRspInfo(restore *rbdv1.RBDRestore, phase rbdv1.RBDRestoreStatusPhase) (err error) {
 	restoreCopy := restore.DeepCopy()
-	controllerutil.AddFinalizer(restoreCopy, utils.RBDFinalizer)
+	// controllerutil.AddFinalizer(restoreCopy, utils.RBDFinalizer)
 	restoreCopy.Status.Phase = phase
 	if !reflect.DeepEqual(restoreCopy, restore) {
 		return r.client.Patch(context.TODO(), restore, client.MergeFrom(restoreCopy))

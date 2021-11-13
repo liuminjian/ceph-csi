@@ -18,20 +18,21 @@ limitations under the License.
 package fake
 
 import (
-	v1 "github.com/ceph/ceph-csi/internal/client/clientset/versioned/typed/rbd/v1"
-	rest "k8s.io/client-go/rest"
-	testing "k8s.io/client-go/testing"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/testing"
+
+	v12 "github.com/ceph/ceph-csi/pkg/client/clientset/versioned/typed/rbd/v1"
 )
 
 type FakeRbdV1 struct {
 	*testing.Fake
 }
 
-func (c *FakeRbdV1) RBDBackups(namespace string) v1.RBDBackupInterface {
+func (c *FakeRbdV1) RBDBackups(namespace string) v12.RBDBackupInterface {
 	return &FakeRBDBackups{c, namespace}
 }
 
-func (c *FakeRbdV1) RBDRestores(namespace string) v1.RBDRestoreInterface {
+func (c *FakeRbdV1) RBDRestores(namespace string) v12.RBDRestoreInterface {
 	return &FakeRBDRestores{c, namespace}
 }
 

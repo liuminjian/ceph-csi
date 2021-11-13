@@ -11,7 +11,6 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -205,7 +204,7 @@ func (r *ReconcileRBDBackup) buildVolumeBackupArgs(backupDest string, snapshotNa
 
 func (r *ReconcileRBDBackup) UpdateBkpInfo(backup *rbdv1.RBDBackup, phase rbdv1.RBDBackupStatusPhase) (err error) {
 	backupCopy := backup.DeepCopy()
-	controllerutil.AddFinalizer(backupCopy, utils.RBDFinalizer)
+	// controllerutil.AddFinalizer(backupCopy, utils.RBDFinalizer)
 	backupCopy.Status.Phase = phase
 	if !reflect.DeepEqual(backupCopy, backup) {
 		return r.client.Patch(context.TODO(), backup, client.MergeFrom(backupCopy))
