@@ -33,10 +33,10 @@ type RBDBackupSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	VolumeName string `json:"volumeName"`
 
-	// SnapshotHandle is the snapshot id for VolumeSnapshotContent
+	// SnapshotName is the snapshot id for VolumeSnapshotContent
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
-	SnapshotHandle string `json:"snapshotHandle"`
+	SnapshotName string `json:"snapshotName"`
 
 	// BackupDest is the remote address for backup transfer
 	// +kubebuilder:validation:Required

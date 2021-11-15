@@ -23,7 +23,6 @@ import (
 	rbdv1 "github.com/ceph/ceph-csi/api/rbd/v1"
 	ctrl "github.com/ceph/ceph-csi/internal/controller"
 	"github.com/ceph/ceph-csi/internal/controller/utils"
-	"github.com/ceph/ceph-csi/internal/rbd"
 	"github.com/ceph/ceph-csi/internal/util"
 )
 
@@ -102,11 +101,11 @@ func (r *ReconcileRBDBackup) reconcileBackup(ctx context.Context, backup *rbdv1.
 
 	err = r.CreateBackup(ctx, backup)
 	if err == nil {
-		klog.Infof("backup %s done %s@%s", backup.Name, backup.Spec.VolumeName, backup.Spec.SnapshotHandle)
+		klog.Infof("backup %s done %s@%s", backup.Name, backup.Spec.VolumeName, backup.Spec.SnapshotName)
 		err = r.UpdateBkpInfo(backup, rbdv1.BKPRBDStatusDone)
 	} else {
 		klog.Errorf("backup %s failed %s@%s err %v", backup.Name, backup.Spec.VolumeName,
-			backup.Spec.SnapshotHandle, err)
+			backup.Spec.SnapshotName, err)
 		err = r.UpdateBkpInfo(backup, rbdv1.BKPRBDStatusFailed)
 	}
 
@@ -131,12 +130,12 @@ func (r *ReconcileRBDBackup) CreateBackup(ctx context.Context, backup *rbdv1.RBD
 	}
 
 	poolName := pv.Spec.CSI.VolumeAttributes["pool"]
-	snapshotHandle := backup.Spec.SnapshotHandle
+	snapshotName := backup.Spec.SnapshotName
 	// Take lock to process only one snapshotHandle at a time.
-	if ok := r.Locks.TryAcquire(snapshotHandle); !ok {
-		return fmt.Errorf(util.VolumeOperationAlreadyExistsFmt, snapshotHandle)
+	if ok := r.Locks.TryAcquire(snapshotName); !ok {
+		return fmt.Errorf(util.VolumeOperationAlreadyExistsFmt, snapshotName)
 	}
-	defer r.Locks.Release(snapshotHandle)
+	defer r.Locks.Release(snapshotName)
 
 	cr, err := utils.GetCredentials(ctx, r.client, r.config.SecretName, r.config.SecretNamespace)
 	if err != nil {
@@ -145,20 +144,12 @@ func (r *ReconcileRBDBackup) CreateBackup(ctx context.Context, backup *rbdv1.RBD
 	}
 	defer cr.DeleteCredentials()
 
-	var vi util.CSIIdentifier
-	err = vi.DecomposeCSIID(snapshotHandle)
-	if err != nil {
-		err = fmt.Errorf("%w: error decoding volume ID (%s) (%s)", rbd.ErrInvalidVolID, err, snapshotHandle)
-		util.ErrorLogMsg(err.Error())
-		return
-	}
-	monitors, _, err := util.FetchMappedClusterIDAndMons(ctx, vi.ClusterID)
+	monitors, _, err := util.FetchMappedClusterIDAndMons(ctx, r.config.ClusterId)
 	if err != nil {
 		util.ErrorLogMsg(err.Error())
 		return
 	}
-	imageName := fmt.Sprintf("csi-snap-%s", vi.ObjectUUID)
-	args, err := r.buildVolumeBackupArgs(backup.Spec.BackupDest, poolName, imageName, monitors, cr)
+	args, err := r.buildVolumeBackupArgs(backup.Spec.BackupDest, poolName, snapshotName, monitors, cr)
 	if err != nil {
 		return err
 	}
@@ -171,7 +162,7 @@ func (r *ReconcileRBDBackup) CreateBackup(ctx context.Context, backup *rbdv1.RBD
 	}
 
 	backup.Status.Pool = poolName
-	backup.Status.ImageName = imageName
+	backup.Status.ImageName = pv.Spec.CSI.VolumeAttributes["imageName"]
 	return
 }
 
