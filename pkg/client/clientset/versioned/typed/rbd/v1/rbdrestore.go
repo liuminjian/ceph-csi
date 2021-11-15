@@ -22,12 +22,11 @@ import (
 	"time"
 
 	v1 "github.com/ceph/ceph-csi/api/rbd/v1"
-	scheme2 "github.com/ceph/ceph-csi/pkg/client/clientset/versioned/scheme"
-
+	scheme "github.com/ceph/ceph-csi/pkg/client/clientset/versioned/scheme"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/client-go/rest"
+	types "k8s.io/apimachinery/pkg/types"
+	watch "k8s.io/apimachinery/pkg/watch"
+	rest "k8s.io/client-go/rest"
 )
 
 // RBDRestoresGetter has a method to return a RBDRestoreInterface.
@@ -71,7 +70,7 @@ func (c *rBDRestores) Get(ctx context.Context, name string, options metav1.GetOp
 		Namespace(c.ns).
 		Resource("rbdrestores").
 		Name(name).
-		VersionedParams(&options, scheme2.ParameterCodec).
+		VersionedParams(&options, scheme.ParameterCodec).
 		Do(ctx).
 		Into(result)
 	return
@@ -87,7 +86,7 @@ func (c *rBDRestores) List(ctx context.Context, opts metav1.ListOptions) (result
 	err = c.client.Get().
 		Namespace(c.ns).
 		Resource("rbdrestores").
-		VersionedParams(&opts, scheme2.ParameterCodec).
+		VersionedParams(&opts, scheme.ParameterCodec).
 		Timeout(timeout).
 		Do(ctx).
 		Into(result)
@@ -104,7 +103,7 @@ func (c *rBDRestores) Watch(ctx context.Context, opts metav1.ListOptions) (watch
 	return c.client.Get().
 		Namespace(c.ns).
 		Resource("rbdrestores").
-		VersionedParams(&opts, scheme2.ParameterCodec).
+		VersionedParams(&opts, scheme.ParameterCodec).
 		Timeout(timeout).
 		Watch(ctx)
 }
@@ -115,7 +114,7 @@ func (c *rBDRestores) Create(ctx context.Context, rBDRestore *v1.RBDRestore, opt
 	err = c.client.Post().
 		Namespace(c.ns).
 		Resource("rbdrestores").
-		VersionedParams(&opts, scheme2.ParameterCodec).
+		VersionedParams(&opts, scheme.ParameterCodec).
 		Body(rBDRestore).
 		Do(ctx).
 		Into(result)
@@ -129,7 +128,7 @@ func (c *rBDRestores) Update(ctx context.Context, rBDRestore *v1.RBDRestore, opt
 		Namespace(c.ns).
 		Resource("rbdrestores").
 		Name(rBDRestore.Name).
-		VersionedParams(&opts, scheme2.ParameterCodec).
+		VersionedParams(&opts, scheme.ParameterCodec).
 		Body(rBDRestore).
 		Do(ctx).
 		Into(result)
@@ -145,7 +144,7 @@ func (c *rBDRestores) UpdateStatus(ctx context.Context, rBDRestore *v1.RBDRestor
 		Resource("rbdrestores").
 		Name(rBDRestore.Name).
 		SubResource("status").
-		VersionedParams(&opts, scheme2.ParameterCodec).
+		VersionedParams(&opts, scheme.ParameterCodec).
 		Body(rBDRestore).
 		Do(ctx).
 		Into(result)
@@ -172,7 +171,7 @@ func (c *rBDRestores) DeleteCollection(ctx context.Context, opts metav1.DeleteOp
 	return c.client.Delete().
 		Namespace(c.ns).
 		Resource("rbdrestores").
-		VersionedParams(&listOpts, scheme2.ParameterCodec).
+		VersionedParams(&listOpts, scheme.ParameterCodec).
 		Timeout(timeout).
 		Body(&opts).
 		Do(ctx).
@@ -187,7 +186,7 @@ func (c *rBDRestores) Patch(ctx context.Context, name string, pt types.PatchType
 		Resource("rbdrestores").
 		Name(name).
 		SubResource(subresources...).
-		VersionedParams(&opts, scheme2.ParameterCodec).
+		VersionedParams(&opts, scheme.ParameterCodec).
 		Body(data).
 		Do(ctx).
 		Into(result)

@@ -126,6 +126,9 @@ func init() {
 
 	flag.BoolVar(&conf.Version, "version", false, "Print cephcsi version information")
 	flag.BoolVar(&conf.EnableProfiling, "enableprofiling", false, "enable go profiling")
+	flag.StringVar(&conf.SecretName, "secret name", "csi-rbd-secret", "name of the secret")
+	flag.StringVar(&conf.SecretNamespace, "secret namespace", "kube-system", "name of the secret namespace")
+	flag.StringVar(&conf.ClusterId, "cluster id", "ecx", "name of the cluster id")
 
 	klog.InitFlags(nil)
 	if err := flag.Set("logtostderr", "true"); err != nil {

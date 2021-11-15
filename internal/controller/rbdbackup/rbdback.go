@@ -102,11 +102,11 @@ func (r *ReconcileRBDBackup) reconcileBackup(ctx context.Context, backup *rbdv1.
 
 	err = r.CreateBackup(ctx, backup)
 	if err == nil {
-		klog.Infof("backup %s done %s@%s", backup.Name, backup.Spec.VolumeName, backup.Spec.SnapName)
+		klog.Infof("backup %s done %s@%s", backup.Name, backup.Spec.VolumeName, backup.Spec.SnapshotHandle)
 		err = r.UpdateBkpInfo(backup, rbdv1.BKPRBDStatusDone)
 	} else {
 		klog.Errorf("backup %s failed %s@%s err %v", backup.Name, backup.Spec.VolumeName,
-			backup.Spec.SnapName, err)
+			backup.Spec.SnapshotHandle, err)
 		err = r.UpdateBkpInfo(backup, rbdv1.BKPRBDStatusFailed)
 	}
 
@@ -124,26 +124,21 @@ func (r *ReconcileRBDBackup) CreateBackup(ctx context.Context, backup *rbdv1.RBD
 		return
 	}
 
-	if pv.Spec.CSI == nil || len(pv.Spec.CSI.VolumeAttributes["pool"]) == 0 ||
-		len(pv.Spec.CSI.VolumeAttributes["imageName"]) == 0 ||
-		pv.Spec.CSI.ControllerExpandSecretRef == nil {
+	if pv.Spec.CSI == nil || len(pv.Spec.CSI.VolumeAttributes["pool"]) == 0 {
 		err = fmt.Errorf("pv volumeAttributes missing pool or imageName or secret")
 		util.ErrorLogMsg(err.Error())
 		return
 	}
 
 	poolName := pv.Spec.CSI.VolumeAttributes["pool"]
-	imageName := pv.Spec.CSI.VolumeAttributes["imageName"]
-	secretName := pv.Spec.CSI.ControllerExpandSecretRef.Name
-	secretNamespace := pv.Spec.CSI.ControllerExpandSecretRef.Namespace
-	volumeHandler := pv.Spec.CSI.VolumeHandle
-	// Take lock to process only one volumeHandle at a time.
-	if ok := r.Locks.TryAcquire(volumeHandler); !ok {
-		return fmt.Errorf(util.VolumeOperationAlreadyExistsFmt, volumeHandler)
+	snapshotHandle := backup.Spec.SnapshotHandle
+	// Take lock to process only one snapshotHandle at a time.
+	if ok := r.Locks.TryAcquire(snapshotHandle); !ok {
+		return fmt.Errorf(util.VolumeOperationAlreadyExistsFmt, snapshotHandle)
 	}
-	defer r.Locks.Release(volumeHandler)
+	defer r.Locks.Release(snapshotHandle)
 
-	cr, err := utils.GetCredentials(ctx, r.client, secretName, secretNamespace)
+	cr, err := utils.GetCredentials(ctx, r.client, r.config.SecretName, r.config.SecretNamespace)
 	if err != nil {
 		util.ErrorLogMsg("failed to get credentials from secret %s", err)
 		return
@@ -151,9 +146,9 @@ func (r *ReconcileRBDBackup) CreateBackup(ctx context.Context, backup *rbdv1.RBD
 	defer cr.DeleteCredentials()
 
 	var vi util.CSIIdentifier
-	err = vi.DecomposeCSIID(volumeHandler)
+	err = vi.DecomposeCSIID(snapshotHandle)
 	if err != nil {
-		err = fmt.Errorf("%w: error decoding volume ID (%s) (%s)", rbd.ErrInvalidVolID, err, volumeHandler)
+		err = fmt.Errorf("%w: error decoding volume ID (%s) (%s)", rbd.ErrInvalidVolID, err, snapshotHandle)
 		util.ErrorLogMsg(err.Error())
 		return
 	}
@@ -162,8 +157,8 @@ func (r *ReconcileRBDBackup) CreateBackup(ctx context.Context, backup *rbdv1.RBD
 		util.ErrorLogMsg(err.Error())
 		return
 	}
-
-	args, err := r.buildVolumeBackupArgs(backup.Spec.BackupDest, backup.Spec.SnapName, poolName, imageName, monitors, cr)
+	imageName := fmt.Sprintf("csi-snap-%s", vi.ObjectUUID)
+	args, err := r.buildVolumeBackupArgs(backup.Spec.BackupDest, poolName, imageName, monitors, cr)
 	if err != nil {
 		return err
 	}
@@ -177,14 +172,10 @@ func (r *ReconcileRBDBackup) CreateBackup(ctx context.Context, backup *rbdv1.RBD
 
 	backup.Status.Pool = poolName
 	backup.Status.ImageName = imageName
-	backup.Status.Monitors = monitors
-	backup.Status.SecretName = secretName
-	backup.Status.SecretNamespace = secretNamespace
-
 	return
 }
 
-func (r *ReconcileRBDBackup) buildVolumeBackupArgs(backupDest string, snapshotName string, pool string, image string,
+func (r *ReconcileRBDBackup) buildVolumeBackupArgs(backupDest string, pool string, image string,
 	monitor string, cr *util.Credentials) ([]string, error) {
 	var RBDVolArg []string
 	bkpAddr := strings.Split(backupDest, ":")
@@ -192,10 +183,10 @@ func (r *ReconcileRBDBackup) buildVolumeBackupArgs(backupDest string, snapshotNa
 		return RBDVolArg, fmt.Errorf("rbd: invalid backup server address %s", backupDest)
 	}
 
-	remote := " | nc -w 3 " + bkpAddr[0] + " " + bkpAddr[1]
+	remote := " | gzip | nc -w 3 " + bkpAddr[0] + " " + bkpAddr[1]
 
-	cmd := fmt.Sprintf("%s %s %s/%s@%s -m %s --id %s -K %s - %s", utils.RBDVolCmd, utils.RBDExportArg,
-		pool, image, snapshotName, monitor, cr.ID, cr.KeyFile, remote)
+	cmd := fmt.Sprintf("%s %s %s/%s -m %s --id %s -K %s - %s", utils.RBDVolCmd, utils.RBDExportArg,
+		pool, image, monitor, cr.ID, cr.KeyFile, remote)
 
 	RBDVolArg = append(RBDVolArg, "-c", cmd)
 

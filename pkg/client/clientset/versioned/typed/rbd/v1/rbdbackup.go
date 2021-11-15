@@ -22,12 +22,11 @@ import (
 	"time"
 
 	v1 "github.com/ceph/ceph-csi/api/rbd/v1"
-	scheme2 "github.com/ceph/ceph-csi/pkg/client/clientset/versioned/scheme"
-
+	scheme "github.com/ceph/ceph-csi/pkg/client/clientset/versioned/scheme"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/client-go/rest"
+	types "k8s.io/apimachinery/pkg/types"
+	watch "k8s.io/apimachinery/pkg/watch"
+	rest "k8s.io/client-go/rest"
 )
 
 // RBDBackupsGetter has a method to return a RBDBackupInterface.
@@ -71,7 +70,7 @@ func (c *rBDBackups) Get(ctx context.Context, name string, options metav1.GetOpt
 		Namespace(c.ns).
 		Resource("rbdbackups").
 		Name(name).
-		VersionedParams(&options, scheme2.ParameterCodec).
+		VersionedParams(&options, scheme.ParameterCodec).
 		Do(ctx).
 		Into(result)
 	return
@@ -87,7 +86,7 @@ func (c *rBDBackups) List(ctx context.Context, opts metav1.ListOptions) (result 
 	err = c.client.Get().
 		Namespace(c.ns).
 		Resource("rbdbackups").
-		VersionedParams(&opts, scheme2.ParameterCodec).
+		VersionedParams(&opts, scheme.ParameterCodec).
 		Timeout(timeout).
 		Do(ctx).
 		Into(result)
@@ -104,7 +103,7 @@ func (c *rBDBackups) Watch(ctx context.Context, opts metav1.ListOptions) (watch.
 	return c.client.Get().
 		Namespace(c.ns).
 		Resource("rbdbackups").
-		VersionedParams(&opts, scheme2.ParameterCodec).
+		VersionedParams(&opts, scheme.ParameterCodec).
 		Timeout(timeout).
 		Watch(ctx)
 }
@@ -115,7 +114,7 @@ func (c *rBDBackups) Create(ctx context.Context, rBDBackup *v1.RBDBackup, opts m
 	err = c.client.Post().
 		Namespace(c.ns).
 		Resource("rbdbackups").
-		VersionedParams(&opts, scheme2.ParameterCodec).
+		VersionedParams(&opts, scheme.ParameterCodec).
 		Body(rBDBackup).
 		Do(ctx).
 		Into(result)
@@ -129,7 +128,7 @@ func (c *rBDBackups) Update(ctx context.Context, rBDBackup *v1.RBDBackup, opts m
 		Namespace(c.ns).
 		Resource("rbdbackups").
 		Name(rBDBackup.Name).
-		VersionedParams(&opts, scheme2.ParameterCodec).
+		VersionedParams(&opts, scheme.ParameterCodec).
 		Body(rBDBackup).
 		Do(ctx).
 		Into(result)
@@ -145,7 +144,7 @@ func (c *rBDBackups) UpdateStatus(ctx context.Context, rBDBackup *v1.RBDBackup, 
 		Resource("rbdbackups").
 		Name(rBDBackup.Name).
 		SubResource("status").
-		VersionedParams(&opts, scheme2.ParameterCodec).
+		VersionedParams(&opts, scheme.ParameterCodec).
 		Body(rBDBackup).
 		Do(ctx).
 		Into(result)
@@ -172,7 +171,7 @@ func (c *rBDBackups) DeleteCollection(ctx context.Context, opts metav1.DeleteOpt
 	return c.client.Delete().
 		Namespace(c.ns).
 		Resource("rbdbackups").
-		VersionedParams(&listOpts, scheme2.ParameterCodec).
+		VersionedParams(&listOpts, scheme.ParameterCodec).
 		Timeout(timeout).
 		Body(&opts).
 		Do(ctx).
@@ -187,7 +186,7 @@ func (c *rBDBackups) Patch(ctx context.Context, name string, pt types.PatchType,
 		Resource("rbdbackups").
 		Name(name).
 		SubResource(subresources...).
-		VersionedParams(&opts, scheme2.ParameterCodec).
+		VersionedParams(&opts, scheme.ParameterCodec).
 		Body(data).
 		Do(ctx).
 		Into(result)

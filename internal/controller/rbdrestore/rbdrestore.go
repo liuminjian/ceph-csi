@@ -126,20 +126,23 @@ func (r *ReconcileRBDRestore) CreateRestore(ctx context.Context, restore *rbdv1.
 		return
 	}
 
-	poolName := bk.Status.Pool
-	imageName := bk.Status.ImageName
-	secretName := bk.Status.SecretName
-	secretNamespace := bk.Status.SecretNamespace
-	monitors := bk.Status.Monitors
-
-	cr, err := utils.GetCredentials(ctx, r.client, secretName, secretNamespace)
+	cr, err := utils.GetCredentials(ctx, r.client, r.config.SecretName, r.config.SecretNamespace)
 	if err != nil {
 		util.ErrorLogMsg("failed to get credentials from secret %s", err)
 		return
 	}
 	defer cr.DeleteCredentials()
 
-	args, err := r.buildVolumeRestoreArgs(restore.Spec.RestoreSrc, poolName, imageName, monitors, cr)
+	monitors, _, err := util.FetchMappedClusterIDAndMons(ctx, r.config.ClusterId)
+	if err != nil {
+		util.ErrorLogMsg(err.Error())
+		return
+	}
+
+	src := restore.Spec.RestoreSrc
+	pool := bk.Status.Pool
+	imageName := bk.Status.ImageName
+	args, err := r.buildVolumeRestoreArgs(src, pool, imageName, monitors, cr)
 	if err != nil {
 		return err
 	}
@@ -162,7 +165,7 @@ func (r *ReconcileRBDRestore) buildVolumeRestoreArgs(restoreSrc string, pool str
 		return RBDVolArg, fmt.Errorf("rbd: invalid restore server address %s", restoreSrc)
 	}
 
-	restoreSource := "nc -w 3 " + rstrAddr[0] + " " + rstrAddr[1] + " | "
+	restoreSource := "nc -w 3 " + rstrAddr[0] + " " + rstrAddr[1] + " | gzip -d | "
 
 	cmd := fmt.Sprintf("%s %s %s -m %s --id %s -K %s - %s/%s",
 		restoreSource, utils.RBDVolCmd, utils.RBDImportArg, monitor, cr.ID, cr.KeyFile, pool, image)

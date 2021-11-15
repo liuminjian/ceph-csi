@@ -116,6 +116,10 @@ type Config struct {
 	// snapshots allowed on rbd image without flattening, once the soft limit is
 	// reached cephcsi will start flattening the older rbd images.
 	MinSnapshotsOnImage uint
+
+	SecretName      string
+	SecretNamespace string
+	ClusterId       string
 }
 
 // ValidateDriverName validates the driver name.

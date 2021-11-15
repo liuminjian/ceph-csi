@@ -19,9 +19,8 @@ package v1
 
 import (
 	v1 "github.com/ceph/ceph-csi/api/rbd/v1"
-	scheme2 "github.com/ceph/ceph-csi/pkg/client/clientset/versioned/scheme"
-
-	"k8s.io/client-go/rest"
+	"github.com/ceph/ceph-csi/pkg/client/clientset/versioned/scheme"
+	rest "k8s.io/client-go/rest"
 )
 
 type RbdV1Interface interface {
@@ -75,7 +74,7 @@ func setConfigDefaults(config *rest.Config) error {
 	gv := v1.SchemeGroupVersion
 	config.GroupVersion = &gv
 	config.APIPath = "/apis"
-	config.NegotiatedSerializer = scheme2.Codecs.WithoutConversion()
+	config.NegotiatedSerializer = scheme.Codecs.WithoutConversion()
 
 	if config.UserAgent == "" {
 		config.UserAgent = rest.DefaultKubernetesUserAgent()
