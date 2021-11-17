@@ -28,10 +28,15 @@ type RBDRestoreSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// backup name to where restore has to be performed
+	// Pool is the name for rbd pool
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
-	BackupName string `json:"backupName"`
+	Pool string `json:"pool"`
+
+	// ImageName is the name for rbd image to restore
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	ImageName string `json:"imagename"`
 
 	// it can be ip:port in case of restore from remote or volumeName in case of local restore
 	// +kubebuilder:validation:Required

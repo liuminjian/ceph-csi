@@ -4,10 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"reflect"
 	"strings"
 
-	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -17,8 +16,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-
-	corev1 "k8s.io/api/core/v1"
 
 	rbdv1 "github.com/ceph/ceph-csi/api/rbd/v1"
 	ctrl "github.com/ceph/ceph-csi/internal/controller"
@@ -88,6 +85,7 @@ func (r *ReconcileRBDBackup) Reconcile(ctx context.Context, request reconcile.Re
 
 	err = r.reconcileBackup(ctx, bk)
 	if err != nil {
+		klog.Errorf("reconcile failed: %s", err.Error())
 		return reconcile.Result{}, err
 	}
 
@@ -102,11 +100,11 @@ func (r *ReconcileRBDBackup) reconcileBackup(ctx context.Context, backup *rbdv1.
 	err = r.CreateBackup(ctx, backup)
 	if err == nil {
 		klog.Infof("backup %s done %s@%s", backup.Name, backup.Spec.VolumeName, backup.Spec.SnapshotName)
-		err = r.UpdateBkpInfo(backup, rbdv1.BKPRBDStatusDone)
+		err = r.UpdateBkpStatus(backup, rbdv1.BKPRBDStatusDone)
 	} else {
 		klog.Errorf("backup %s failed %s@%s err %v", backup.Name, backup.Spec.VolumeName,
 			backup.Spec.SnapshotName, err)
-		err = r.UpdateBkpInfo(backup, rbdv1.BKPRBDStatusFailed)
+		err = r.UpdateBkpStatus(backup, rbdv1.BKPRBDStatusFailed)
 	}
 
 	return
@@ -115,21 +113,7 @@ func (r *ReconcileRBDBackup) reconcileBackup(ctx context.Context, backup *rbdv1.
 func (r *ReconcileRBDBackup) CreateBackup(ctx context.Context, backup *rbdv1.RBDBackup) (err error) {
 	// TODO 快照不存在则创建
 
-	pv := &corev1.PersistentVolume{}
-	err = r.client.Get(ctx, types.NamespacedName{Name: backup.Spec.VolumeName}, pv)
-	if err != nil {
-		errStr := fmt.Sprintf("find pv failed: %s", err.Error())
-		util.ErrorLogMsg(errStr)
-		return
-	}
-
-	if pv.Spec.CSI == nil || len(pv.Spec.CSI.VolumeAttributes["pool"]) == 0 {
-		err = fmt.Errorf("pv volumeAttributes missing pool or imageName or secret")
-		util.ErrorLogMsg(err.Error())
-		return
-	}
-
-	poolName := pv.Spec.CSI.VolumeAttributes["pool"]
+	poolName := backup.Spec.Pool
 	snapshotName := backup.Spec.SnapshotName
 	// Take lock to process only one snapshotHandle at a time.
 	if ok := r.Locks.TryAcquire(snapshotName); !ok {
@@ -154,15 +138,14 @@ func (r *ReconcileRBDBackup) CreateBackup(ctx context.Context, backup *rbdv1.RBD
 		return err
 	}
 	cmd := exec.Command("bash", args...)
+	util.UsefulLog(ctx, "backup command: %v", args)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		err = fmt.Errorf("rbd: could not backup the volume %v cmd %v output: %s, err: %s",
-			pv.Name, args, string(out), err.Error())
+			snapshotName, args, string(out), err.Error())
 		util.ErrorLogMsg(err.Error())
 	}
 
-	backup.Status.Pool = poolName
-	backup.Status.ImageName = pv.Spec.CSI.VolumeAttributes["imageName"]
 	return
 }
 
@@ -176,20 +159,18 @@ func (r *ReconcileRBDBackup) buildVolumeBackupArgs(backupDest string, pool strin
 
 	remote := " | gzip | nc -w 3 " + bkpAddr[0] + " " + bkpAddr[1]
 
-	cmd := fmt.Sprintf("%s %s %s/%s -m %s --id %s -K %s - %s", utils.RBDVolCmd, utils.RBDExportArg,
-		pool, image, monitor, cr.ID, cr.KeyFile, remote)
+	cmd := fmt.Sprintf("%s %s %s/%s --id %s --keyfile=%s -m %s - %s", utils.RBDVolCmd, utils.RBDExportArg,
+		pool, image, cr.ID, cr.KeyFile, monitor, remote)
 
 	RBDVolArg = append(RBDVolArg, "-c", cmd)
 
 	return RBDVolArg, nil
 }
 
-func (r *ReconcileRBDBackup) UpdateBkpInfo(backup *rbdv1.RBDBackup, phase rbdv1.RBDBackupStatusPhase) (err error) {
-	backupCopy := backup.DeepCopy()
+func (r *ReconcileRBDBackup) UpdateBkpStatus(backup *rbdv1.RBDBackup, phase rbdv1.RBDBackupStatusPhase) (err error) {
 	// controllerutil.AddFinalizer(backupCopy, utils.RBDFinalizer)
-	backupCopy.Status.Phase = phase
-	if !reflect.DeepEqual(backupCopy, backup) {
-		return r.client.Patch(context.TODO(), backup, client.MergeFrom(backupCopy))
-	}
-	return
+	backup.Status.Phase = phase
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		return r.client.Update(context.TODO(), backup)
+	})
 }

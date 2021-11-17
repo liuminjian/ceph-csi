@@ -17,6 +17,8 @@ const (
 	RBDVolCmd           = "rbd"
 	RBDExportArg        = "export"
 	RBDImportArg        = "import"
+	RBDRenameArg        = "rename"
+	RBDRemoveArg        = "rm"
 	RBDFinalizer string = "rbd.ceph.io/finalizer"
 )
 

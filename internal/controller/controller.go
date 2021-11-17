@@ -18,6 +18,8 @@ package controller
 import (
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/runtime"
+
 	"github.com/ceph/ceph-csi/internal/util"
 
 	clientConfig "sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -57,9 +59,10 @@ func addToManager(mgr manager.Manager, config Config) error {
 }
 
 // Start will start all the registered managers.
-func Start(config Config) error {
+func Start(config Config, scheme *runtime.Scheme) error {
 	electionID := config.DriverName + "-" + config.Namespace
 	opts := manager.Options{
+		Scheme:         scheme,
 		LeaderElection: true,
 		// disable metrics
 		MetricsBindAddress:      "0",

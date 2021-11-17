@@ -67,5 +67,44 @@ rules:
     resources: ["csinodes"]
     verbs: ["get", "list", "watch"]
 {{- end }}
-
+  - apiGroups:
+      - rbd.ceph.io
+    resources:
+      - rbdbackups
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - rbd.ceph.io
+    resources:
+      - rbdbackups/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - rbd.ceph.io
+    resources:
+      - rbdrestores
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - rbd.ceph.io
+    resources:
+      - rbdrestores/status
+    verbs:
+      - get
+      - patch
+      - update
 {{- end -}}
