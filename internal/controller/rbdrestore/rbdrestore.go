@@ -98,10 +98,10 @@ func (r *ReconcileRBDRestore) reconcileRestore(ctx context.Context, restore *rbd
 
 	err = r.CreateRestore(ctx, restore)
 	if err == nil {
-		klog.Infof("restore %s done %s", restore.Name, restore.Name)
+		klog.Infof("restore %s done %s", restore.Name, restore.Spec.ImageName)
 		err = r.UpdateRspStatus(restore, rbdv1.RSTRBDStatusDone)
 	} else {
-		klog.Errorf("restore %s failed %s err %v", restore.Name, restore.Name, err)
+		klog.Errorf("restore %s failed %s err %v", restore.Name, restore.Spec.ImageName, err)
 		err = r.UpdateRspStatus(restore, rbdv1.RSTRBDStatusFailed)
 	}
 
@@ -127,13 +127,24 @@ func (r *ReconcileRBDRestore) CreateRestore(ctx context.Context, restore *rbdv1.
 	src := restore.Spec.RestoreSrc
 	pool := restore.Spec.Pool
 	imageName := restore.Spec.ImageName
+
+	removeArgs := r.buildVolumeRemoveArgs(pool, imageName, monitors, cr)
+	cmd := exec.Command("bash", removeArgs...)
+	util.UsefulLog(ctx, "restore rm: %v", removeArgs)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		err = fmt.Errorf("rbd: could not restore the volume %v cmd %v output: %s, err: %s",
+			restore.Name, removeArgs, string(out), err.Error())
+		util.ErrorLogMsg(err.Error())
+	}
+
 	args, err := r.buildVolumeRestoreArgs(src, pool, imageName, monitors, cr)
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("bash", args...)
+	cmd = exec.Command("bash", args...)
 	util.UsefulLog(ctx, "restore command: %v", args)
-	out, err := cmd.CombinedOutput()
+	out, err = cmd.CombinedOutput()
 	if err != nil {
 		err = fmt.Errorf("rbd: could not restore the volume %v cmd %v output: %s, err: %s",
 			restore.Name, args, string(out), err.Error())
@@ -159,6 +170,15 @@ func (r *ReconcileRBDRestore) buildVolumeRestoreArgs(restoreSrc string, pool str
 	RBDVolArg = append(RBDVolArg, "-c", cmd)
 
 	return RBDVolArg, nil
+}
+
+func (r *ReconcileRBDRestore) buildVolumeRemoveArgs(pool string, image string, monitor string,
+	cr *util.Credentials) []string {
+	cmd := fmt.Sprintf("%s %s --id %s --keyfile=%s -m %s %s/%s", utils.RBDVolCmd, utils.RBDRemoveArg,
+		cr.ID, cr.KeyFile, monitor, pool, image)
+	var RBDVolArg []string
+	RBDVolArg = append(RBDVolArg, "-c", cmd)
+	return RBDVolArg
 }
 
 func (r *ReconcileRBDRestore) UpdateRspStatus(restore *rbdv1.RBDRestore, phase rbdv1.RBDRestoreStatusPhase) (err error) {
