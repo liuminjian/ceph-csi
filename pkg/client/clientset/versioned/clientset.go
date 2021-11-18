@@ -20,7 +20,7 @@ package versioned
 import (
 	"fmt"
 
-	rbdv1 "github.com/ceph/ceph-csi/internal/client/clientset/versioned/typed/rbd/v1"
+	rbdv1 "github.com/ceph/ceph-csi/pkg/client/clientset/versioned/typed/rbd/v1"
 	discovery "k8s.io/client-go/discovery"
 	rest "k8s.io/client-go/rest"
 	flowcontrol "k8s.io/client-go/util/flowcontrol"

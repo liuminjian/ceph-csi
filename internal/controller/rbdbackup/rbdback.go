@@ -4,14 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"reflect"
 	"strings"
 
-	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -19,12 +17,9 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
-	corev1 "k8s.io/api/core/v1"
-
 	rbdv1 "github.com/ceph/ceph-csi/api/rbd/v1"
 	ctrl "github.com/ceph/ceph-csi/internal/controller"
 	"github.com/ceph/ceph-csi/internal/controller/utils"
-	"github.com/ceph/ceph-csi/internal/rbd"
 	"github.com/ceph/ceph-csi/internal/util"
 )
 
@@ -90,6 +85,7 @@ func (r *ReconcileRBDBackup) Reconcile(ctx context.Context, request reconcile.Re
 
 	err = r.reconcileBackup(ctx, bk)
 	if err != nil {
+		klog.Errorf("reconcile failed: %s", err.Error())
 		return reconcile.Result{}, err
 	}
 
@@ -103,12 +99,12 @@ func (r *ReconcileRBDBackup) reconcileBackup(ctx context.Context, backup *rbdv1.
 
 	err = r.CreateBackup(ctx, backup)
 	if err == nil {
-		klog.Infof("backup %s done %s@%s", backup.Name, backup.Spec.VolumeName, backup.Spec.SnapName)
-		err = r.UpdateBkpInfo(backup, rbdv1.BKPRBDStatusDone)
+		klog.Infof("backup %s done %s@%s", backup.Name, backup.Spec.VolumeName, backup.Spec.SnapshotName)
+		err = r.UpdateBkpStatus(backup, rbdv1.BKPRBDStatusDone)
 	} else {
 		klog.Errorf("backup %s failed %s@%s err %v", backup.Name, backup.Spec.VolumeName,
-			backup.Spec.SnapName, err)
-		err = r.UpdateBkpInfo(backup, rbdv1.BKPRBDStatusFailed)
+			backup.Spec.SnapshotName, err)
+		err = r.UpdateBkpStatus(backup, rbdv1.BKPRBDStatusFailed)
 	}
 
 	return
@@ -117,75 +113,43 @@ func (r *ReconcileRBDBackup) reconcileBackup(ctx context.Context, backup *rbdv1.
 func (r *ReconcileRBDBackup) CreateBackup(ctx context.Context, backup *rbdv1.RBDBackup) (err error) {
 	// TODO 快照不存在则创建
 
-	pv := &corev1.PersistentVolume{}
-	err = r.client.Get(ctx, types.NamespacedName{Name: backup.Spec.VolumeName}, pv)
-	if err != nil {
-		errStr := fmt.Sprintf("find pv failed: %s", err.Error())
-		util.ErrorLogMsg(errStr)
-		return
+	poolName := backup.Spec.Pool
+	snapshotName := backup.Spec.SnapshotName
+	// Take lock to process only one snapshotHandle at a time.
+	if ok := r.Locks.TryAcquire(snapshotName); !ok {
+		return fmt.Errorf(util.VolumeOperationAlreadyExistsFmt, snapshotName)
 	}
+	defer r.Locks.Release(snapshotName)
 
-	if pv.Spec.CSI == nil || len(pv.Spec.CSI.VolumeAttributes["pool"]) == 0 ||
-		len(pv.Spec.CSI.VolumeAttributes["imageName"]) == 0 ||
-		pv.Spec.CSI.ControllerExpandSecretRef == nil {
-		err = fmt.Errorf("pv volumeAttributes missing pool or imageName or secret")
-		util.ErrorLogMsg(err.Error())
-		return
-	}
-
-	poolName := pv.Spec.CSI.VolumeAttributes["pool"]
-	imageName := pv.Spec.CSI.VolumeAttributes["imageName"]
-	secretName := pv.Spec.CSI.ControllerExpandSecretRef.Name
-	secretNamespace := pv.Spec.CSI.ControllerExpandSecretRef.Namespace
-	volumeHandler := pv.Spec.CSI.VolumeHandle
-	// Take lock to process only one volumeHandle at a time.
-	if ok := r.Locks.TryAcquire(volumeHandler); !ok {
-		return fmt.Errorf(util.VolumeOperationAlreadyExistsFmt, volumeHandler)
-	}
-	defer r.Locks.Release(volumeHandler)
-
-	cr, err := utils.GetCredentials(ctx, r.client, secretName, secretNamespace)
+	cr, err := utils.GetCredentials(ctx, r.client, r.config.SecretName, r.config.SecretNamespace)
 	if err != nil {
 		util.ErrorLogMsg("failed to get credentials from secret %s", err)
 		return
 	}
 	defer cr.DeleteCredentials()
 
-	var vi util.CSIIdentifier
-	err = vi.DecomposeCSIID(volumeHandler)
-	if err != nil {
-		err = fmt.Errorf("%w: error decoding volume ID (%s) (%s)", rbd.ErrInvalidVolID, err, volumeHandler)
-		util.ErrorLogMsg(err.Error())
-		return
-	}
-	monitors, _, err := util.FetchMappedClusterIDAndMons(ctx, vi.ClusterID)
+	monitors, _, err := util.FetchMappedClusterIDAndMons(ctx, r.config.ClusterId)
 	if err != nil {
 		util.ErrorLogMsg(err.Error())
 		return
 	}
-
-	args, err := r.buildVolumeBackupArgs(backup.Spec.BackupDest, backup.Spec.SnapName, poolName, imageName, monitors, cr)
+	args, err := r.buildVolumeBackupArgs(backup.Spec.BackupDest, poolName, snapshotName, monitors, cr)
 	if err != nil {
 		return err
 	}
 	cmd := exec.Command("bash", args...)
+	util.UsefulLog(ctx, "backup command: %v", args)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		err = fmt.Errorf("rbd: could not backup the volume %v cmd %v output: %s, err: %s",
-			pv.Name, args, string(out), err.Error())
+			snapshotName, args, string(out), err.Error())
 		util.ErrorLogMsg(err.Error())
 	}
-
-	backup.Status.Pool = poolName
-	backup.Status.ImageName = imageName
-	backup.Status.Monitors = monitors
-	backup.Status.SecretName = secretName
-	backup.Status.SecretNamespace = secretNamespace
 
 	return
 }
 
-func (r *ReconcileRBDBackup) buildVolumeBackupArgs(backupDest string, snapshotName string, pool string, image string,
+func (r *ReconcileRBDBackup) buildVolumeBackupArgs(backupDest string, pool string, image string,
 	monitor string, cr *util.Credentials) ([]string, error) {
 	var RBDVolArg []string
 	bkpAddr := strings.Split(backupDest, ":")
@@ -193,22 +157,20 @@ func (r *ReconcileRBDBackup) buildVolumeBackupArgs(backupDest string, snapshotNa
 		return RBDVolArg, fmt.Errorf("rbd: invalid backup server address %s", backupDest)
 	}
 
-	remote := " | nc -w 3 " + bkpAddr[0] + " " + bkpAddr[1]
+	remote := " | gzip | nc -w 3 " + bkpAddr[0] + " " + bkpAddr[1]
 
-	cmd := fmt.Sprintf("%s %s %s/%s@%s -m %s --id %s -K %s - %s", utils.RBDVolCmd, utils.RBDExportArg,
-		pool, image, snapshotName, monitor, cr.ID, cr.KeyFile, remote)
+	cmd := fmt.Sprintf("%s %s %s/%s --id %s --keyfile=%s -m %s - %s", utils.RBDVolCmd, utils.RBDExportArg,
+		pool, image, cr.ID, cr.KeyFile, monitor, remote)
 
 	RBDVolArg = append(RBDVolArg, "-c", cmd)
 
 	return RBDVolArg, nil
 }
 
-func (r *ReconcileRBDBackup) UpdateBkpInfo(backup *rbdv1.RBDBackup, phase rbdv1.RBDBackupStatusPhase) (err error) {
-	backupCopy := backup.DeepCopy()
-	controllerutil.AddFinalizer(backupCopy, utils.RBDFinalizer)
-	backupCopy.Status.Phase = phase
-	if !reflect.DeepEqual(backupCopy, backup) {
-		return r.client.Patch(context.TODO(), backup, client.MergeFrom(backupCopy))
-	}
-	return
+func (r *ReconcileRBDBackup) UpdateBkpStatus(backup *rbdv1.RBDBackup, phase rbdv1.RBDBackupStatusPhase) (err error) {
+	// controllerutil.AddFinalizer(backupCopy, utils.RBDFinalizer)
+	backup.Status.Phase = phase
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		return r.client.Update(context.TODO(), backup)
+	})
 }

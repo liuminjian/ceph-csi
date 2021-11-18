@@ -4,14 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"reflect"
 	"strings"
 
-	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -100,11 +98,11 @@ func (r *ReconcileRBDRestore) reconcileRestore(ctx context.Context, restore *rbd
 
 	err = r.CreateRestore(ctx, restore)
 	if err == nil {
-		klog.Infof("restore %s done %s", restore.Name, restore.Spec.BackupName)
-		err = r.UpdateRspInfo(restore, rbdv1.RSTRBDStatusDone)
+		klog.Infof("restore %s done %s", restore.Name, restore.Spec.ImageName)
+		err = r.UpdateRspStatus(restore, rbdv1.RSTRBDStatusDone)
 	} else {
-		klog.Errorf("restore %s failed %s err %v", restore.Name, restore.Spec.BackupName, err)
-		err = r.UpdateRspInfo(restore, rbdv1.RSTRBDStatusFailed)
+		klog.Errorf("restore %s failed %s err %v", restore.Name, restore.Spec.ImageName, err)
+		err = r.UpdateRspStatus(restore, rbdv1.RSTRBDStatusFailed)
 	}
 
 	return
@@ -113,39 +111,40 @@ func (r *ReconcileRBDRestore) reconcileRestore(ctx context.Context, restore *rbd
 func (r *ReconcileRBDRestore) CreateRestore(ctx context.Context, restore *rbdv1.RBDRestore) (err error) {
 	// TODO 快照不存在则创建
 
-	bk := &rbdv1.RBDBackup{}
-	err = r.client.Get(ctx, types.NamespacedName{Name: restore.Spec.BackupName, Namespace: restore.Namespace}, bk)
-	if err != nil {
-		errStr := fmt.Sprintf("find backup failed: %s", err.Error())
-		util.ErrorLogMsg(errStr)
-		return
-	}
-
-	if bk.Status.Phase != rbdv1.BKPRBDStatusDone {
-		err = fmt.Errorf("backup is not done")
-		util.ErrorLogMsg(err.Error())
-		return
-	}
-
-	poolName := bk.Status.Pool
-	imageName := bk.Status.ImageName
-	secretName := bk.Status.SecretName
-	secretNamespace := bk.Status.SecretNamespace
-	monitors := bk.Status.Monitors
-
-	cr, err := utils.GetCredentials(ctx, r.client, secretName, secretNamespace)
+	cr, err := utils.GetCredentials(ctx, r.client, r.config.SecretName, r.config.SecretNamespace)
 	if err != nil {
 		util.ErrorLogMsg("failed to get credentials from secret %s", err)
 		return
 	}
 	defer cr.DeleteCredentials()
 
-	args, err := r.buildVolumeRestoreArgs(restore.Spec.RestoreSrc, poolName, imageName, monitors, cr)
+	monitors, _, err := util.FetchMappedClusterIDAndMons(ctx, r.config.ClusterId)
+	if err != nil {
+		util.ErrorLogMsg(err.Error())
+		return
+	}
+
+	src := restore.Spec.RestoreSrc
+	pool := restore.Spec.Pool
+	imageName := restore.Spec.ImageName
+
+	removeArgs := r.buildVolumeRemoveArgs(pool, imageName, monitors, cr)
+	cmd := exec.Command("bash", removeArgs...)
+	util.UsefulLog(ctx, "restore rm: %v", removeArgs)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		err = fmt.Errorf("rbd: could not restore the volume %v cmd %v output: %s, err: %s",
+			restore.Name, removeArgs, string(out), err.Error())
+		util.ErrorLogMsg(err.Error())
+	}
+
+	args, err := r.buildVolumeRestoreArgs(src, pool, imageName, monitors, cr)
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("bash", args...)
-	out, err := cmd.CombinedOutput()
+	cmd = exec.Command("bash", args...)
+	util.UsefulLog(ctx, "restore command: %v", args)
+	out, err = cmd.CombinedOutput()
 	if err != nil {
 		err = fmt.Errorf("rbd: could not restore the volume %v cmd %v output: %s, err: %s",
 			restore.Name, args, string(out), err.Error())
@@ -163,22 +162,29 @@ func (r *ReconcileRBDRestore) buildVolumeRestoreArgs(restoreSrc string, pool str
 		return RBDVolArg, fmt.Errorf("rbd: invalid restore server address %s", restoreSrc)
 	}
 
-	restoreSource := "nc -w 3 " + rstrAddr[0] + " " + rstrAddr[1] + " | "
+	restoreSource := "nc -w 3 " + rstrAddr[0] + " " + rstrAddr[1] + " | gzip -d | "
 
-	cmd := fmt.Sprintf("%s %s %s -m %s --id %s -K %s - %s/%s",
-		restoreSource, utils.RBDVolCmd, utils.RBDImportArg, monitor, cr.ID, cr.KeyFile, pool, image)
+	cmd := fmt.Sprintf("%s %s %s --id %s --keyfile=%s -m %s - %s/%s",
+		restoreSource, utils.RBDVolCmd, utils.RBDImportArg, cr.ID, cr.KeyFile, monitor, pool, image)
 
 	RBDVolArg = append(RBDVolArg, "-c", cmd)
 
 	return RBDVolArg, nil
 }
 
-func (r *ReconcileRBDRestore) UpdateRspInfo(restore *rbdv1.RBDRestore, phase rbdv1.RBDRestoreStatusPhase) (err error) {
-	restoreCopy := restore.DeepCopy()
-	controllerutil.AddFinalizer(restoreCopy, utils.RBDFinalizer)
-	restoreCopy.Status.Phase = phase
-	if !reflect.DeepEqual(restoreCopy, restore) {
-		return r.client.Patch(context.TODO(), restore, client.MergeFrom(restoreCopy))
-	}
-	return
+func (r *ReconcileRBDRestore) buildVolumeRemoveArgs(pool string, image string, monitor string,
+	cr *util.Credentials) []string {
+	cmd := fmt.Sprintf("%s %s --id %s --keyfile=%s -m %s %s/%s", utils.RBDVolCmd, utils.RBDRemoveArg,
+		cr.ID, cr.KeyFile, monitor, pool, image)
+	var RBDVolArg []string
+	RBDVolArg = append(RBDVolArg, "-c", cmd)
+	return RBDVolArg
+}
+
+func (r *ReconcileRBDRestore) UpdateRspStatus(restore *rbdv1.RBDRestore, phase rbdv1.RBDRestoreStatusPhase) (err error) {
+	// controllerutil.AddFinalizer(restoreCopy, utils.RBDFinalizer)
+	restore.Status.Phase = phase
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		return r.client.Update(context.TODO(), restore)
+	})
 }

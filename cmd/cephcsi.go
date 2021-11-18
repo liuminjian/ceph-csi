@@ -23,14 +23,19 @@ import (
 	"runtime"
 	"time"
 
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/klog/v2"
+
+	rbdv1 "github.com/ceph/ceph-csi/api/rbd/v1"
 	"github.com/ceph/ceph-csi/internal/cephfs"
 	"github.com/ceph/ceph-csi/internal/controller"
 	"github.com/ceph/ceph-csi/internal/controller/persistentvolume"
+	"github.com/ceph/ceph-csi/internal/controller/rbdbackup"
+	"github.com/ceph/ceph-csi/internal/controller/rbdrestore"
 	"github.com/ceph/ceph-csi/internal/liveness"
 	"github.com/ceph/ceph-csi/internal/rbd"
 	"github.com/ceph/ceph-csi/internal/util"
-
-	"k8s.io/klog/v2"
 )
 
 const (
@@ -54,6 +59,7 @@ const (
 )
 
 var conf util.Config
+var scheme = k8sruntime.NewScheme()
 
 func init() {
 	// common flags
@@ -126,6 +132,9 @@ func init() {
 
 	flag.BoolVar(&conf.Version, "version", false, "Print cephcsi version information")
 	flag.BoolVar(&conf.EnableProfiling, "enableprofiling", false, "enable go profiling")
+	flag.StringVar(&conf.SecretName, "secret name", "csi-rbd-secret", "name of the secret")
+	flag.StringVar(&conf.SecretNamespace, "secret namespace", "kube-system", "name of the secret namespace")
+	flag.StringVar(&conf.ClusterId, "cluster id", "ecx", "name of the cluster id")
 
 	klog.InitFlags(nil)
 	if err := flag.Set("logtostderr", "true"); err != nil {
@@ -230,12 +239,15 @@ func main() {
 
 	case controllerType:
 		cfg := controller.Config{
-			DriverName: dname,
-			Namespace:  conf.DriverNamespace,
+			DriverName:      dname,
+			Namespace:       conf.DriverNamespace,
+			SecretName:      conf.SecretName,
+			SecretNamespace: conf.SecretNamespace,
+			ClusterId:       conf.ClusterId,
 		}
 		// initialize all controllers before starting.
 		initControllers()
-		err = controller.Start(cfg)
+		err = controller.Start(cfg, scheme)
 		if err != nil {
 			logAndExit(err.Error())
 		}
@@ -246,8 +258,12 @@ func main() {
 
 // initControllers will initialize all the controllers.
 func initControllers() {
+	_ = clientgoscheme.AddToScheme(scheme)
+	_ = rbdv1.AddToScheme(scheme)
 	// Add list of controller here.
 	persistentvolume.Init()
+	rbdbackup.Init()
+	rbdrestore.Init()
 }
 
 func validateCloneDepthFlag(conf *util.Config) {

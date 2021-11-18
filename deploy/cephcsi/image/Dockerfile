@@ -50,6 +50,8 @@ RUN make cephcsi
 #-- Final container
 FROM ${BASE_IMAGE}
 
+RUN dnf -y install nc
+
 ARG SRC_DIR
 
 LABEL maintainers="Ceph-CSI Authors" \

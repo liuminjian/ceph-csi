@@ -33,10 +33,15 @@ type RBDBackupSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	VolumeName string `json:"volumeName"`
 
-	// SnapName is the snapshot name for backup
+	// Pool is the snapshot id for rbd pool
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
-	SnapName string `json:"snapName,omitempty"`
+	Pool string `json:"pool"`
+
+	// SnapshotName is the snapshot id for VolumeSnapshotContent
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	SnapshotName string `json:"snapshotName"`
 
 	// BackupDest is the remote address for backup transfer
 	// +kubebuilder:validation:Required
@@ -49,12 +54,7 @@ type RBDBackupSpec struct {
 type RBDBackupStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
-	Phase           RBDBackupStatusPhase `json:"phase,omitempty"`
-	Pool            string               `json:"pool"`
-	ImageName       string               `json:"imageName"`
-	Monitors        string               `json:"monitors"`
-	SecretName      string               `json:"secretName"`
-	SecretNamespace string               `json:"secretNamespace"`
+	Phase RBDBackupStatusPhase `json:"phase,omitempty"`
 }
 
 // RBDBackupStatusPhase is to hold status of backup

@@ -18,9 +18,9 @@ limitations under the License.
 package fake
 
 import (
-	clientset "github.com/ceph/ceph-csi/internal/client/clientset/versioned"
-	rbdv1 "github.com/ceph/ceph-csi/internal/client/clientset/versioned/typed/rbd/v1"
-	fakerbdv1 "github.com/ceph/ceph-csi/internal/client/clientset/versioned/typed/rbd/v1/fake"
+	clientset "github.com/ceph/ceph-csi/pkg/client/clientset/versioned"
+	rbdv1 "github.com/ceph/ceph-csi/pkg/client/clientset/versioned/typed/rbd/v1"
+	fakerbdv1 "github.com/ceph/ceph-csi/pkg/client/clientset/versioned/typed/rbd/v1/fake"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery"

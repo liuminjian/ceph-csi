@@ -19,7 +19,7 @@ package v1
 
 import (
 	v1 "github.com/ceph/ceph-csi/api/rbd/v1"
-	"github.com/ceph/ceph-csi/internal/client/clientset/versioned/scheme"
+	"github.com/ceph/ceph-csi/pkg/client/clientset/versioned/scheme"
 	rest "k8s.io/client-go/rest"
 )
 
