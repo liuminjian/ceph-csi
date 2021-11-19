@@ -3,30 +3,33 @@ package rbdrestore
 import (
 	"context"
 	"fmt"
-	"os/exec"
-	"strings"
+	"time"
 
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	rbdv1 "github.com/ceph/ceph-csi/api/rbd/v1"
+	cephctl "github.com/ceph/ceph-csi/internal/controller"
 	ctrl "github.com/ceph/ceph-csi/internal/controller"
 	"github.com/ceph/ceph-csi/internal/controller/utils"
 	"github.com/ceph/ceph-csi/internal/util"
 )
 
 type ReconcileRBDRestore struct {
-	client client.Client
-	config ctrl.Config
-	Locks  *util.VolumeLocks
+	client  client.Client
+	config  ctrl.Config
+	locks   *util.VolumeLocks
+	taskCtl *cephctl.TaskController
 }
 
 // Init will add the ReconcileRBDRestore to the list.
@@ -41,9 +44,10 @@ func (r *ReconcileRBDRestore) Add(mgr manager.Manager, config ctrl.Config) error
 
 func newRBDRestoreReconciler(mgr manager.Manager, config ctrl.Config) reconcile.Reconciler {
 	r := &ReconcileRBDRestore{
-		mgr.GetClient(),
-		config,
-		util.NewVolumeLocks(),
+		client:  mgr.GetClient(),
+		config:  config,
+		locks:   util.NewVolumeLocks(),
+		taskCtl: cephctl.NewTaskController(),
 	}
 
 	return r
@@ -65,12 +69,17 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		return fmt.Errorf("failed to watch the changes: %w", err)
 	}
 
+	err = c.Watch(&source.Kind{Type: &corev1.Secret{}}, &handler.EnqueueRequestForObject{})
+	if err != nil {
+		return fmt.Errorf("failed to watch the changes: %w", err)
+	}
+
 	return nil
 }
 
 func (r *ReconcileRBDRestore) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
-	bk := &rbdv1.RBDRestore{}
-	err := r.client.Get(ctx, request.NamespacedName, bk)
+	rs := &rbdv1.RBDRestore{}
+	err := r.client.Get(ctx, request.NamespacedName, rs)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return reconcile.Result{}, nil
@@ -78,107 +87,73 @@ func (r *ReconcileRBDRestore) Reconcile(ctx context.Context, request reconcile.R
 
 		return reconcile.Result{}, err
 	}
+	taskName := request.NamespacedName.String()
 	// Check if the object is under deletion
-	if !bk.GetDeletionTimestamp().IsZero() {
+	if !rs.GetDeletionTimestamp().IsZero() {
+		if r.taskCtl.ContainTask(taskName) {
+			taskJob := r.taskCtl.GetTask(taskName)
+			if taskJob.Running() {
+				taskJob.Stop()
+			}
+			r.taskCtl.DeleteTask(taskName)
+		}
+		controllerutil.RemoveFinalizer(rs, utils.RBDFinalizer)
+		err := r.client.Update(ctx, rs)
+		if err != nil {
+			util.ErrorLogMsg("failed to update %s %s", taskName, err)
+			return reconcile.Result{}, err
+		}
 		return reconcile.Result{}, nil
 	}
 
-	err = r.reconcileRestore(ctx, bk)
-	if err != nil {
-		return reconcile.Result{}, err
+	if rs.Status.Phase == rbdv1.RSTRBDStatusDone || rs.Status.Phase == rbdv1.RSTRBDStatusFailed {
+		return reconcile.Result{}, nil
+	}
+
+	defer func() {
+		if err != nil {
+			r.taskCtl.DeleteTask(taskName)
+		}
+	}()
+
+	if !r.taskCtl.ContainTask(taskName) {
+
+		cr, err := utils.GetCredentials(ctx, r.client, r.config.SecretName, r.config.SecretNamespace)
+		if err != nil {
+			util.ErrorLogMsg("failed to get credentials from secret %s", err)
+		}
+		monitors, _, err := util.FetchMappedClusterIDAndMons(ctx, r.config.ClusterId)
+		if err != nil {
+			util.ErrorLogMsg(err.Error())
+		}
+
+		taskJob := NewRestoreTask(ctx, rs, r.locks, cr, monitors, r.config.ClusterId)
+		err = r.taskCtl.StartTask(taskName, taskJob)
+		if err != nil {
+			klog.Errorf("restore %s failed %s err %v", rs.Name, rs.Spec.ImageName, err)
+			err = r.UpdateRspStatus(rs, rbdv1.RSTRBDStatusFailed)
+		}
+		return reconcile.Result{RequeueAfter: 5 * time.Second}, nil
+	} else {
+		taskJob := r.taskCtl.GetTask(taskName)
+		if taskJob.Running() {
+			util.UsefulLog(ctx, "%s running", rs.Name)
+			return reconcile.Result{RequeueAfter: 5 * time.Second}, nil
+		} else if taskJob.Success() {
+			util.UsefulLog(ctx, "%s success", rs.Name)
+			klog.Infof("restore %s done %s", rs.Name, rs.Spec.ImageName)
+			err = r.UpdateRspStatus(rs, rbdv1.RSTRBDStatusDone)
+		} else {
+			util.UsefulLog(ctx, "%s fail", rs.Name)
+			klog.Errorf("restore %s failed %s err %v", rs.Name, rs.Spec.ImageName, taskJob.Error())
+			err = r.UpdateRspStatus(rs, rbdv1.RSTRBDStatusFailed)
+		}
+		if err != nil {
+			util.ErrorLogMsg("failed to update status %s %s", taskName, err)
+		}
 	}
 
 	return reconcile.Result{}, nil
-}
-
-func (r *ReconcileRBDRestore) reconcileRestore(ctx context.Context, restore *rbdv1.RBDRestore) (err error) {
-	if restore.Status.Phase != rbdv1.RSTRBDStatusInit {
-		return
-	}
-
-	err = r.CreateRestore(ctx, restore)
-	if err == nil {
-		klog.Infof("restore %s done %s", restore.Name, restore.Spec.ImageName)
-		err = r.UpdateRspStatus(restore, rbdv1.RSTRBDStatusDone)
-	} else {
-		klog.Errorf("restore %s failed %s err %v", restore.Name, restore.Spec.ImageName, err)
-		err = r.UpdateRspStatus(restore, rbdv1.RSTRBDStatusFailed)
-	}
-
-	return
-}
-
-func (r *ReconcileRBDRestore) CreateRestore(ctx context.Context, restore *rbdv1.RBDRestore) (err error) {
-	// TODO 快照不存在则创建
-
-	cr, err := utils.GetCredentials(ctx, r.client, r.config.SecretName, r.config.SecretNamespace)
-	if err != nil {
-		util.ErrorLogMsg("failed to get credentials from secret %s", err)
-		return
-	}
-	defer cr.DeleteCredentials()
-
-	monitors, _, err := util.FetchMappedClusterIDAndMons(ctx, r.config.ClusterId)
-	if err != nil {
-		util.ErrorLogMsg(err.Error())
-		return
-	}
-
-	src := restore.Spec.RestoreSrc
-	pool := restore.Spec.Pool
-	imageName := restore.Spec.ImageName
-
-	removeArgs := r.buildVolumeRemoveArgs(pool, imageName, monitors, cr)
-	cmd := exec.Command("bash", removeArgs...)
-	util.UsefulLog(ctx, "restore rm: %v", removeArgs)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		err = fmt.Errorf("rbd: could not restore the volume %v cmd %v output: %s, err: %s",
-			restore.Name, removeArgs, string(out), err.Error())
-		util.ErrorLogMsg(err.Error())
-	}
-
-	args, err := r.buildVolumeRestoreArgs(src, pool, imageName, monitors, cr)
-	if err != nil {
-		return err
-	}
-	cmd = exec.Command("bash", args...)
-	util.UsefulLog(ctx, "restore command: %v", args)
-	out, err = cmd.CombinedOutput()
-	if err != nil {
-		err = fmt.Errorf("rbd: could not restore the volume %v cmd %v output: %s, err: %s",
-			restore.Name, args, string(out), err.Error())
-		util.ErrorLogMsg(err.Error())
-	}
-
-	return
-}
-
-func (r *ReconcileRBDRestore) buildVolumeRestoreArgs(restoreSrc string, pool string, image string,
-	monitor string, cr *util.Credentials) ([]string, error) {
-	var RBDVolArg []string
-	rstrAddr := strings.Split(restoreSrc, ":")
-	if len(rstrAddr) != 2 {
-		return RBDVolArg, fmt.Errorf("rbd: invalid restore server address %s", restoreSrc)
-	}
-
-	restoreSource := "nc -w 3 " + rstrAddr[0] + " " + rstrAddr[1] + " | gzip -d | "
-
-	cmd := fmt.Sprintf("%s %s %s --id %s --keyfile=%s -m %s - %s/%s",
-		restoreSource, utils.RBDVolCmd, utils.RBDImportArg, cr.ID, cr.KeyFile, monitor, pool, image)
-
-	RBDVolArg = append(RBDVolArg, "-c", cmd)
-
-	return RBDVolArg, nil
-}
-
-func (r *ReconcileRBDRestore) buildVolumeRemoveArgs(pool string, image string, monitor string,
-	cr *util.Credentials) []string {
-	cmd := fmt.Sprintf("%s %s --id %s --keyfile=%s -m %s %s/%s", utils.RBDVolCmd, utils.RBDRemoveArg,
-		cr.ID, cr.KeyFile, monitor, pool, image)
-	var RBDVolArg []string
-	RBDVolArg = append(RBDVolArg, "-c", cmd)
-	return RBDVolArg
 }
 
 func (r *ReconcileRBDRestore) UpdateRspStatus(restore *rbdv1.RBDRestore, phase rbdv1.RBDRestoreStatusPhase) (err error) {
