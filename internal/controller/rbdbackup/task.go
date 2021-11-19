@@ -1,0 +1,100 @@
+package rbdbackup
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os/exec"
+	"strings"
+
+	rbdv1 "github.com/ceph/ceph-csi/api/rbd/v1"
+	"github.com/ceph/ceph-csi/internal/controller"
+	"github.com/ceph/ceph-csi/internal/controller/utils"
+	"github.com/ceph/ceph-csi/internal/util"
+)
+
+type BackupTask struct {
+	ctx        context.Context
+	cancelFunc context.CancelFunc
+	backup     *rbdv1.RBDBackup
+	locks      *util.VolumeLocks
+	cr         *util.Credentials
+	monitor    string
+	clusterId  string
+	cmd        *exec.Cmd
+	buf        bytes.Buffer
+	isRunning  bool
+}
+
+func NewBackupTask(ctx context.Context, backup *rbdv1.RBDBackup,
+	locks *util.VolumeLocks, cr *util.Credentials, monitor string, clusterId string) controller.TaskJob {
+	cancelCtx, cancelFunc := context.WithCancel(ctx)
+	return &BackupTask{ctx: cancelCtx, cancelFunc: cancelFunc, backup: backup, locks: locks,
+		cr: cr, monitor: monitor, clusterId: clusterId}
+}
+
+func (b *BackupTask) Running() bool {
+	return b.isRunning
+}
+
+func (b *BackupTask) Success() bool {
+	return !b.Running() && b.cmd.ProcessState.Success()
+}
+
+func (b *BackupTask) Start() error {
+	ctx := context.TODO()
+	poolName := b.backup.Spec.Pool
+	snapshotName := b.backup.Spec.SnapshotName
+	// Take lock to process only one snapshotHandle at a time.
+	if ok := b.locks.TryAcquire(snapshotName); !ok {
+		return fmt.Errorf(util.VolumeOperationAlreadyExistsFmt, snapshotName)
+	}
+	defer b.locks.Release(snapshotName)
+	args, err := b.buildVolumeBackupArgs(b.backup.Spec.BackupDest, poolName, snapshotName, b.monitor, b.cr)
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(b.ctx, "bash", args...)
+	util.UsefulLog(ctx, "backup command: %v", args)
+	cmd.Stdout = &b.buf
+	cmd.Stderr = &b.buf
+	err = cmd.Start()
+	if err != nil {
+		err = fmt.Errorf("rbd: could not backup the volume %v cmd %v err: %s", snapshotName, args, err.Error())
+		util.ErrorLogMsg(err.Error())
+	}
+	b.isRunning = true
+	go func() {
+		cmd.Wait()
+		b.isRunning = false
+	}()
+	b.cmd = cmd
+	return err
+}
+
+func (b *BackupTask) Stop() {
+	b.cr.DeleteCredentials()
+	b.cancelFunc()
+}
+
+func (b *BackupTask) Error() error {
+	return fmt.Errorf(b.buf.String())
+}
+
+func (b *BackupTask) buildVolumeBackupArgs(backupDest string, pool string, image string,
+	monitor string, cr *util.Credentials) ([]string, error) {
+	var RBDVolArg []string
+	bkpAddr := strings.Split(backupDest, ":")
+	if len(bkpAddr) != 2 {
+		return RBDVolArg, fmt.Errorf("rbd: invalid backup server address %s", backupDest)
+	}
+
+	remote := " | gzip | nc -w 3 " + bkpAddr[0] + " " + bkpAddr[1]
+
+	cmd := fmt.Sprintf("%s %s %s/%s --id %s --keyfile=%s -m %s - %s", utils.RBDVolCmd, utils.RBDExportArg,
+		pool, image, cr.ID, cr.KeyFile, monitor, remote)
+
+	RBDVolArg = append(RBDVolArg, "-c", cmd)
+
+	return RBDVolArg, nil
+}
