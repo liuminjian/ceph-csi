@@ -8,6 +8,14 @@ type TaskJob interface {
 	Error() error
 }
 
+type InUseError struct {
+	Err string
+}
+
+func (i InUseError) Error() string {
+	return i.Err
+}
+
 type TaskController struct {
 	jobs map[string]TaskJob
 }
@@ -20,9 +28,14 @@ func (t *TaskController) ContainTask(name string) bool {
 	return t.jobs[name] != nil
 }
 
-func (t *TaskController) StartTask(name string, job TaskJob) error {
-	t.jobs[name] = job
-	return job.Start()
+func (t *TaskController) StartTask(name string, job TaskJob) (err error) {
+	err = job.Start()
+	if err != nil {
+		job.Stop()
+	} else {
+		t.jobs[name] = job
+	}
+	return
 }
 
 func (t *TaskController) StopTask(name string) {
