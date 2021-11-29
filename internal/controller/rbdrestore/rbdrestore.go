@@ -130,6 +130,12 @@ func (r *ReconcileRBDRestore) Reconcile(ctx context.Context, request reconcile.R
 		taskJob := NewRestoreTask(ctx, rs, r.locks, cr, monitors, r.config.ClusterId)
 		err = r.taskCtl.StartTask(taskName, taskJob)
 		if err != nil {
+
+			if _, ok := err.(cephctl.InUseError); ok {
+				klog.Info("image already inuse, requeue and retry")
+				return reconcile.Result{RequeueAfter: 5 * time.Second}, nil
+			}
+
 			klog.Errorf("restore %s failed %s err %v", rs.Name, rs.Spec.ImageName, err)
 			err = r.UpdateRspStatus(rs, rbdv1.RSTRBDStatusFailed)
 		}

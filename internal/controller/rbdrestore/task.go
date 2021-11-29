@@ -51,9 +51,12 @@ func (r *RestoreTask) Start() error {
 	util.UsefulLog(r.ctx, "restore rm: %v", removeArgs)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		err = fmt.Errorf("rbd: could not restore the volume %v cmd %v output: %s, err: %s",
-			r.restore.Name, removeArgs, string(out), err.Error())
+		err = fmt.Errorf("rbd: could not restore the volume %v cmd %v output: %s, err: %s, exit code: %d",
+			r.restore.Name, removeArgs, string(out), err.Error(), cmd.ProcessState.ExitCode())
 		util.ErrorLogMsg(err.Error())
+		if cmd.ProcessState.ExitCode() == 16 {
+			return controller.InUseError{Err: "image already in use"}
+		}
 	}
 
 	args, err := r.buildVolumeRestoreArgs(src, pool, imageName, r.monitor, r.cr)
