@@ -1357,8 +1357,17 @@ func (cs *ControllerServer) DeleteSnapshot(
 	} else {
 		rbdVol.ImageID = rbdSnap.ImageID
 		// update parent name to delete the snapshot
-		rbdSnap.RbdImageName = rbdVol.RbdImageName
-		err = cleanUpSnapshot(ctx, rbdVol, rbdSnap, rbdVol, cr)
+		// rbdSnap.RbdImageName = rbdVol.RbdImageName
+		parentVol := generateVolFromSnap(rbdSnap)
+		parentVol.RbdImageName = rbdSnap.RbdImageName
+		// parentVol.ParentName = rbdVol.ParentName
+		// parentVol.ParentPool = rbdVol.ParentPool
+		err = parentVol.Connect(cr)
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		defer parentVol.Destroy()
+		err = cleanUpSnapshot(ctx, parentVol, rbdSnap, rbdVol, cr)
 		if err != nil {
 			util.ErrorLog(ctx, "failed to delete image: %v", err)
 

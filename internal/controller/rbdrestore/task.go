@@ -38,18 +38,34 @@ func (r *RestoreTask) Running() bool {
 }
 
 func (r *RestoreTask) Success() bool {
-	return !r.Running() && r.cmd.ProcessState.Success()
+	return !r.Running() && r.cmd.ProcessState.Success() && !strings.Contains(r.buf.String(), "error")
 }
 
 func (r *RestoreTask) Start() error {
+	ctx := context.TODO()
 	src := r.restore.Spec.RestoreSrc
 	pool := r.restore.Spec.Pool
 	imageName := r.restore.Spec.ImageName
 
-	removeArgs := r.buildVolumeRemoveArgs(pool, imageName, r.monitor, r.cr)
-	cmd := exec.Command("bash", removeArgs...)
-	util.UsefulLog(r.ctx, "restore rm: %v", removeArgs)
+	purgeArgs := r.buildVolumePurgeArgs(pool, imageName, r.monitor, r.cr)
+	cmd := exec.Command("bash", purgeArgs...)
+	util.UsefulLog(r.ctx, "purge: %v", purgeArgs)
 	out, err := cmd.CombinedOutput()
+	if err != nil {
+		err = fmt.Errorf("rbd: could not purge the volume %v cmd %v output: %s, err: %s, exit code: %d",
+			r.restore.Name, purgeArgs, string(out), err.Error(), cmd.ProcessState.ExitCode())
+		util.ErrorLogMsg(err.Error())
+		if cmd.ProcessState.ExitCode() == 16 {
+			return controller.InUseError{Err: "image already in use"}
+		} else {
+			return err
+		}
+	}
+
+	removeArgs := r.buildVolumeRemoveArgs(pool, imageName, r.monitor, r.cr)
+	cmd = exec.Command("bash", removeArgs...)
+	util.UsefulLog(r.ctx, "restore rm: %v", removeArgs)
+	out, err = cmd.CombinedOutput()
 	if err != nil {
 		err = fmt.Errorf("rbd: could not restore the volume %v cmd %v output: %s, err: %s, exit code: %d",
 			r.restore.Name, removeArgs, string(out), err.Error(), cmd.ProcessState.ExitCode())
@@ -77,6 +93,7 @@ func (r *RestoreTask) Start() error {
 	go func() {
 		cmd.Wait()
 		r.isRunning = false
+		util.UsefulLog(ctx, fmt.Sprintf("%s %s", imageName, r.buf.String()))
 	}()
 	r.cmd = cmd
 	return err
@@ -111,7 +128,16 @@ func (r *RestoreTask) buildVolumeRestoreArgs(restoreSrc string, pool string, ima
 
 func (r *RestoreTask) buildVolumeRemoveArgs(pool string, image string, monitor string,
 	cr *util.Credentials) []string {
-	cmd := fmt.Sprintf("%s %s --id %s --keyfile=%s -m %s %s/%s", utils.RBDVolCmd, utils.RBDRemoveArg,
+	cmd := fmt.Sprintf("%s %s --id %s --keyfile=%s -m %s %s/%s", utils.RBDVolCmd, utils.RBDTrashMoveArg,
+		cr.ID, cr.KeyFile, monitor, pool, image)
+	var RBDVolArg []string
+	RBDVolArg = append(RBDVolArg, "-c", cmd)
+	return RBDVolArg
+}
+
+func (r *RestoreTask) buildVolumePurgeArgs(pool string, image string, monitor string,
+	cr *util.Credentials) []string {
+	cmd := fmt.Sprintf("%s %s --id %s --keyfile=%s -m %s %s/%s", utils.RBDVolCmd, utils.RBDPurgeArg,
 		cr.ID, cr.KeyFile, monitor, pool, image)
 	var RBDVolArg []string
 	RBDVolArg = append(RBDVolArg, "-c", cmd)
