@@ -202,6 +202,7 @@ func attachRBDImage(ctx context.Context, volOptions *rbdVolume, device string, c
 	}
 
 	devicePath, found := waitForPath(ctx, volOptions.Pool, volOptions.RadosNamespace, image, 1, useNBD)
+	util.UsefulLog(ctx, "waitForPath: %s %v", devicePath, found)
 	if !found {
 		backoff := wait.Backoff{
 			Duration: rbdImageWatcherInitDelay,
@@ -210,7 +211,7 @@ func attachRBDImage(ctx context.Context, volOptions *rbdVolume, device string, c
 		}
 
 		err = waitForrbdImage(ctx, backoff, volOptions)
-
+		util.UsefulLog(ctx, "waitForrbdImage: %v", err)
 		if err != nil {
 			return "", err
 		}
@@ -341,7 +342,9 @@ func waitForrbdImage(ctx context.Context, backoff wait.Backoff, volOptions *rbdV
 	imagePath := volOptions.String()
 
 	err := wait.ExponentialBackoff(backoff, func() (bool, error) {
+		util.UsefulLog(ctx, "before isInUse: %s", imagePath)
 		used, err := volOptions.isInUse()
+		util.UsefulLog(ctx, "after isInUse: %v %v %v", used, err, volOptions.DisableInUseChecks)
 		if err != nil {
 			return false, fmt.Errorf("fail to check rbd image status: (%w)", err)
 		}

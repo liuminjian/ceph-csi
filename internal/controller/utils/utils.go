@@ -16,6 +16,7 @@ import (
 const (
 	RBDVolCmd               = "rbd"
 	RBDExportArg            = "export"
+	RBDDUArg                = "du"
 	RBDExportDiffArg        = "export-diff"
 	RBDImportArg            = "import"
 	RBDRenameArg            = "rename"
