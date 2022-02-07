@@ -14,12 +14,16 @@ import (
 )
 
 const (
-	RBDVolCmd           = "rbd"
-	RBDExportArg        = "export"
-	RBDImportArg        = "import"
-	RBDRenameArg        = "rename"
-	RBDRemoveArg        = "rm"
-	RBDFinalizer string = "rbd.ceph.io/finalizer"
+	RBDVolCmd               = "rbd"
+	RBDExportArg            = "export"
+	RBDDUArg                = "du"
+	RBDExportDiffArg        = "export-diff"
+	RBDImportArg            = "import"
+	RBDRenameArg            = "rename"
+	RBDRemoveArg            = "rm"
+	RBDTrashMoveArg         = "trash move"
+	RBDPurgeArg             = "snap purge"
+	RBDFinalizer     string = "rbd.ceph.io/finalizer"
 )
 
 func GetCredentials(

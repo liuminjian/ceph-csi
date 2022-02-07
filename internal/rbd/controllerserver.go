@@ -18,11 +18,18 @@ package rbd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strconv"
+	"strings"
 
+	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/ceph/ceph-csi/internal/controller/utils"
 	csicommon "github.com/ceph/ceph-csi/internal/csi-common"
+	"github.com/ceph/ceph-csi/internal/journal"
 	"github.com/ceph/ceph-csi/internal/util"
 
 	librbd "github.com/ceph/go-ceph/rbd"
@@ -30,6 +37,7 @@ import (
 	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
@@ -1054,6 +1062,9 @@ func (cs *ControllerServer) CreateSnapshot(
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
+	// 获取快照大小
+	updateSizeWhenCreate(rbdVol, rbdSnap, cr)
+
 	return &csi.CreateSnapshotResponse{
 		Snapshot: &csi.Snapshot{
 			SizeBytes:      vol.VolSize,
@@ -1357,13 +1368,31 @@ func (cs *ControllerServer) DeleteSnapshot(
 	} else {
 		rbdVol.ImageID = rbdSnap.ImageID
 		// update parent name to delete the snapshot
-		rbdSnap.RbdImageName = rbdVol.RbdImageName
-		err = cleanUpSnapshot(ctx, rbdVol, rbdSnap, rbdVol, cr)
+		// rbdSnap.RbdImageName = rbdVol.RbdImageName
+		parentVol := generateVolFromSnap(rbdSnap)
+		parentVol.RbdImageName = rbdSnap.RbdImageName
+		// parentVol.ParentName = rbdVol.ParentName
+		// parentVol.ParentPool = rbdVol.ParentPool
+		err = parentVol.Connect(cr)
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		defer parentVol.Destroy()
+
+		rbdDU, err := getImageList(parentVol, cr)
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+
+		err = cleanUpSnapshot(ctx, parentVol, rbdSnap, rbdVol, cr)
 		if err != nil {
 			util.ErrorLog(ctx, "failed to delete image: %v", err)
 
 			return nil, status.Error(codes.Internal, err.Error())
 		}
+		// 获取快照大小
+		util.UsefulLog(ctx, "updateSizeWhenDelete")
+		updateSizeWhenDelete(rbdDU, parentVol, rbdSnap, cr)
 	}
 	err = undoSnapReservation(ctx, rbdSnap, cr)
 	if err != nil {
@@ -1479,4 +1508,128 @@ func isThickProvisionRequest(parameters map[string]string) bool {
 	}
 
 	return thickBool
+}
+
+func updateSizeWhenCreate(rbdVol *rbdVolume, rbdSnap *rbdSnapshot, cr *util.Credentials) (err error) {
+	ctx := context.Background()
+	defer func() {
+		if err != nil {
+			util.ErrorLogMsg(err.Error())
+		}
+	}()
+	rbdDU, err := getImageList(rbdVol, cr)
+	if err != nil {
+		return
+	}
+	snapshotName := fmt.Sprintf("csi-snap-%s", rbdSnap.ReservedID)
+	for _, item := range rbdDU.Images {
+		if item.Snapshot == snapshotName {
+			contentName := strings.Replace(rbdSnap.RequestName, "snapshot-", "snapcontent-", 1)
+			err = updateVolumeSnapshotContent(ctx, contentName, item.UsedSize)
+		}
+	}
+	return
+}
+
+func updateSizeWhenDelete(rbdDU rbdDuImageList, rbdVol *rbdVolume, rbdSnap *rbdSnapshot, cr *util.Credentials) (err error) {
+	ctx := context.Background()
+	defer func() {
+		if err != nil {
+			util.ErrorLogMsg(err.Error())
+		}
+	}()
+	var lastImage *rbdDuImage
+	var curImage *rbdDuImage
+	snapshotName := fmt.Sprintf("csi-snap-%s", rbdSnap.ReservedID)
+	util.UsefulLog(ctx, "snapshotName %s", snapshotName)
+	for idx, item := range rbdDU.Images {
+		util.UsefulLog(ctx, "item snapshotName %s %d", item.Snapshot, idx)
+		if item.Snapshot == snapshotName {
+			if idx > 0 {
+				lastImage = rbdDU.Images[idx-1]
+				curImage = item
+			}
+			break
+		}
+	}
+	if lastImage == nil || curImage == nil {
+		util.UsefulLog(ctx, "last image not found")
+		return
+	}
+	volJournal = journal.NewCSISnapshotJournal(CSIInstanceID)
+	j, err := volJournal.Connect(rbdVol.Monitors, rbdVol.RadosNamespace, cr)
+	if err != nil {
+		return
+	}
+	defer j.Destroy()
+	util.UsefulLog(ctx, "rbd: %s %s", rbdVol.Pool, lastImage.Snapshot)
+	keyName := strings.Replace(lastImage.Snapshot, "csi-snap-", "", 1)
+	attributes, err := j.GetImageAttributes(ctx, rbdVol.Pool, keyName, true)
+	if err != nil {
+		return
+	}
+	util.UsefulLog(ctx, "attributes: %v", attributes)
+	contentName := strings.Replace(attributes.RequestName, "snapshot-", "snapcontent-", 1)
+	err = updateVolumeSnapshotContent(ctx, contentName, lastImage.UsedSize+curImage.UsedSize)
+	return
+}
+
+func updateVolumeSnapshotContent(ctx context.Context, contentName string, usedSize uint64) (err error) {
+	snapClient, err := util.NewSnapClient()
+	if err != nil {
+		return
+	}
+	content, err := snapClient.VolumeSnapshotContents().Get(ctx, contentName, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	contentNew := content.DeepCopy()
+	label := map[string]string{
+		"ecx.ctcdn.cn/snapshot-size": strconv.FormatInt(int64(usedSize), 10),
+	}
+	contentNew.Labels = label
+	contentBytes, err := json.Marshal(contentNew)
+	if err != nil {
+		return err
+	}
+	_, err = snapClient.VolumeSnapshotContents().Patch(ctx, contentName, types.MergePatchType,
+		contentBytes, metav1.PatchOptions{})
+	if err != nil {
+		return err
+	}
+	return
+}
+
+func getImageList(rbdVol *rbdVolume, cr *util.Credentials) (rbdDU rbdDuImageList, err error) {
+	cmdArg := fmt.Sprintf("%s %s --format=json %s/%s --id %s --keyfile=%s -m %s", utils.RBDVolCmd, utils.RBDDUArg,
+		rbdVol.Pool, rbdVol.RbdImageName, cr.ID, cr.KeyFile, rbdVol.Monitors)
+	var args []string
+	args = append(args, "-c")
+	args = append(args, cmdArg)
+	ctx := context.Background()
+	cmd := exec.Command("bash", args...)
+	util.UsefulLog(ctx, "rbd command: %v", args)
+
+	stdout, err := cmd.Output()
+	if err != nil {
+		return
+	}
+	rbdDU = rbdDuImageList{}
+	err = json.Unmarshal(stdout, &rbdDU)
+	if err != nil {
+		return
+	}
+	return
+}
+
+type rbdDuImage struct {
+	Name            string `json:"name"`
+	Snapshot        string `json:"snapshot"`
+	ProvisionedSize uint64 `json:"provisioned_size"`
+	UsedSize        uint64 `json:"used_size"`
+}
+
+// rbdDuImageList contains the list of images returned by 'rbd du'.
+type rbdDuImageList struct {
+	Images []*rbdDuImage `json:"images"`
 }

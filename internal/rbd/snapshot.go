@@ -52,16 +52,17 @@ func createRBDClone(
 			snap.RbdSnapName,
 			err)
 	}
-	errSnap := parentVol.deleteSnapshot(ctx, snap)
-	if errSnap != nil {
-		util.ErrorLog(ctx, "failed to delete snapshot: %v", errSnap)
-		delErr := deleteImage(ctx, cloneRbdVol, cr)
-		if delErr != nil {
-			util.ErrorLog(ctx, "failed to delete rbd image: %s with error: %v", cloneRbdVol, delErr)
-		}
-
-		return err
-	}
+	util.UsefulLog(ctx, "parentVol: %v, snap: %v", parentVol, snap)
+	// errSnap := parentVol.deleteSnapshot(ctx, snap)
+	// if errSnap != nil {
+	// 	util.ErrorLog(ctx, "failed to delete snapshot: %v", errSnap)
+	// 	delErr := deleteImage(ctx, cloneRbdVol, cr)
+	// 	if delErr != nil {
+	// 		util.ErrorLog(ctx, "failed to delete rbd image: %s with error: %v", cloneRbdVol, delErr)
+	// 	}
+	//
+	// 	return err
+	// }
 
 	err = cloneRbdVol.getImageInfo()
 	if err != nil {
@@ -85,9 +86,10 @@ func cleanUpSnapshot(
 	rbdSnap *rbdSnapshot,
 	rbdVol *rbdVolume,
 	cr *util.Credentials) error {
+	util.UsefulLog(ctx, "parentVol: %v, snap: %v", parentVol, rbdSnap)
 	err := parentVol.deleteSnapshot(ctx, rbdSnap)
 	if err != nil {
-		if !errors.Is(err, ErrSnapNotFound) {
+		if !errors.Is(err, ErrSnapNotFound) && !errors.Is(err, ErrImageNotFound) {
 			util.ErrorLog(ctx, "failed to delete snapshot %q: %v", rbdSnap, err)
 
 			return err
@@ -95,7 +97,17 @@ func cleanUpSnapshot(
 	}
 
 	if rbdVol != nil {
-		err := deleteImage(ctx, rbdVol, cr)
+
+		err := rbdVol.deleteSnapshot(ctx, rbdSnap)
+		if err != nil {
+			if !errors.Is(err, ErrSnapNotFound) && !errors.Is(err, ErrImageNotFound) {
+				util.ErrorLog(ctx, "failed to delete clone snapshot %q: %v", rbdSnap, err)
+
+				return err
+			}
+		}
+
+		err = deleteImage(ctx, rbdVol, cr)
 		if err != nil {
 			if !errors.Is(err, ErrImageNotFound) {
 				util.ErrorLog(ctx, "failed to delete rbd image %q with error: %v", rbdVol, err)

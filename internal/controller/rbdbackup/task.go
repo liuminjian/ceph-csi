@@ -38,7 +38,7 @@ func (b *BackupTask) Running() bool {
 }
 
 func (b *BackupTask) Success() bool {
-	return !b.Running() && b.cmd.ProcessState.Success()
+	return !b.Running() && b.cmd.ProcessState.Success() && !strings.Contains(b.buf.String(), "error")
 }
 
 func (b *BackupTask) Start() error {
@@ -67,6 +67,7 @@ func (b *BackupTask) Start() error {
 	go func() {
 		cmd.Wait()
 		b.isRunning = false
+		util.UsefulLog(ctx, fmt.Sprintf("%s %s", snapshotName, b.buf.String()))
 	}()
 	b.cmd = cmd
 	return err
@@ -88,6 +89,12 @@ func (b *BackupTask) buildVolumeBackupArgs(backupDest string, pool string, image
 	if len(bkpAddr) != 2 {
 		return RBDVolArg, fmt.Errorf("rbd: invalid backup server address %s", backupDest)
 	}
+
+	// vol := rbd.NewRbdVol(pool, b.monitor, b.clusterId, image)
+	// snapshot, err := vol.GetSnapshotName(cr)
+	// if err != nil {
+	// 	return RBDVolArg, err
+	// }
 
 	remote := " | gzip | nc -w 3 " + bkpAddr[0] + " " + bkpAddr[1]
 
