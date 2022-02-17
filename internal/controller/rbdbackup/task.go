@@ -96,7 +96,7 @@ func (b *BackupTask) buildVolumeBackupArgs(backupDest string, pool string, image
 	// 	return RBDVolArg, err
 	// }
 
-	remote := " | gzip | nc -w 3 " + bkpAddr[0] + " " + bkpAddr[1]
+	remote := " | gzip | nc -w 30 -v " + bkpAddr[0] + " " + bkpAddr[1]
 
 	cmd := fmt.Sprintf("%s %s %s/%s --id %s --keyfile=%s -m %s - %s", utils.RBDVolCmd, utils.RBDExportArg,
 		pool, image, cr.ID, cr.KeyFile, monitor, remote)
