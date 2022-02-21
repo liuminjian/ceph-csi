@@ -1612,6 +1612,9 @@ func getImageList(rbdVol *rbdVolume, cr *util.Credentials) (rbdDU rbdDuImageList
 
 	stdout, err := cmd.Output()
 	if err != nil {
+		if cmd.ProcessState.ExitCode() == 2 {
+			return rbdDU, nil
+		}
 		return
 	}
 	rbdDU = rbdDuImageList{}
