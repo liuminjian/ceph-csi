@@ -118,7 +118,7 @@ func (r *RestoreTask) buildVolumeRestoreArgs(restoreSrc string, pool string, ima
 
 	restoreSource := "nc -w 30 -v " + rstrAddr[0] + " " + rstrAddr[1] + " | gzip -d | "
 
-	cmd := fmt.Sprintf("%s %s %s --id %s --keyfile=%s -m %s - %s/%s",
+	cmd := fmt.Sprintf("%s %s %s --image-feature layering --id %s --keyfile=%s -m %s - %s/%s",
 		restoreSource, utils.RBDVolCmd, utils.RBDImportArg, cr.ID, cr.KeyFile, monitor, pool, image)
 
 	RBDVolArg = append(RBDVolArg, "-c", cmd)
