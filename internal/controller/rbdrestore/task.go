@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"syscall"
 
 	rbdv1 "github.com/ceph/ceph-csi/api/rbd/v1"
 	"github.com/ceph/ceph-csi/internal/controller"
@@ -83,6 +86,10 @@ func (r *RestoreTask) Start() error {
 	util.UsefulLog(r.ctx, "restore command: %v", args)
 	cmd.Stdout = &r.buf
 	cmd.Stderr = &r.buf
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid:   true, // 使子进程拥有自己的 pgid，等同于子进程的 pid
+		Pdeathsig: syscall.SIGTERM,
+	}
 	err = cmd.Start()
 	if err != nil {
 		err = fmt.Errorf("rbd: could not restore the volume %v cmd %v output: %s, err: %s",
@@ -116,7 +123,14 @@ func (r *RestoreTask) buildVolumeRestoreArgs(restoreSrc string, pool string, ima
 		return RBDVolArg, fmt.Errorf("rbd: invalid restore server address %s", restoreSrc)
 	}
 
-	restoreSource := "nc -w 30 -v " + rstrAddr[0] + " " + rstrAddr[1] + " | gzip -d | "
+	timeout := os.Getenv("TIMEOUT")
+	var timeoutInt int
+	timeoutInt, err := strconv.Atoi(timeout)
+	if err != nil {
+		timeoutInt = 30
+	}
+
+	restoreSource := fmt.Sprintf("nc -w %d -v %s %s | gzip -d | ", timeoutInt, rstrAddr[0], rstrAddr[1])
 
 	cmd := fmt.Sprintf("%s %s %s --image-feature layering --id %s --keyfile=%s -m %s - %s/%s",
 		restoreSource, utils.RBDVolCmd, utils.RBDImportArg, cr.ID, cr.KeyFile, monitor, pool, image)

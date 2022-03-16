@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"syscall"
 
 	rbdv1 "github.com/ceph/ceph-csi/api/rbd/v1"
 	"github.com/ceph/ceph-csi/internal/controller"
@@ -58,6 +61,10 @@ func (b *BackupTask) Start() error {
 	util.UsefulLog(ctx, "backup command: %v", args)
 	cmd.Stdout = &b.buf
 	cmd.Stderr = &b.buf
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid:   true, // 使子进程拥有自己的 pgid，等同于子进程的 pid
+		Pdeathsig: syscall.SIGTERM,
+	}
 	err = cmd.Start()
 	if err != nil {
 		err = fmt.Errorf("rbd: could not backup the volume %v cmd %v err: %s", snapshotName, args, err.Error())
@@ -96,8 +103,13 @@ func (b *BackupTask) buildVolumeBackupArgs(backupDest string, pool string, image
 	// 	return RBDVolArg, err
 	// }
 
-	remote := " | gzip | nc -w 30 -v " + bkpAddr[0] + " " + bkpAddr[1]
-
+	timeout := os.Getenv("TIMEOUT")
+	var timeoutInt int
+	timeoutInt, err := strconv.Atoi(timeout)
+	if err != nil {
+		timeoutInt = 30
+	}
+	remote := fmt.Sprintf(" | gzip | nc -w %d -v %s %s", timeoutInt, bkpAddr[0], bkpAddr[1])
 	cmd := fmt.Sprintf("%s %s %s/%s --id %s --keyfile=%s -m %s - %s", utils.RBDVolCmd, utils.RBDExportArg,
 		pool, image, cr.ID, cr.KeyFile, monitor, remote)
 
