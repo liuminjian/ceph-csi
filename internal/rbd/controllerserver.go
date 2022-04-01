@@ -917,6 +917,12 @@ func cleanupRBDImage(ctx context.Context,
 		}
 	}
 
+	// snapshot purge
+	err = purgeSnapshot(ctx, rbdVol, cr)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
 	// Deleting rbd image
 	util.DebugLog(ctx, "deleting image %s", rbdVol.RbdImageName)
 	if err = deleteImage(ctx, rbdVol, cr); err != nil {
@@ -1635,4 +1641,28 @@ type rbdDuImage struct {
 // rbdDuImageList contains the list of images returned by 'rbd du'.
 type rbdDuImageList struct {
 	Images []*rbdDuImage `json:"images"`
+}
+
+func buildVolumePurgeArgs(pool string, image string, monitor string,
+	cr *util.Credentials) []string {
+	cmd := fmt.Sprintf("%s %s --id %s --keyfile=%s -m %s %s/%s", utils.RBDVolCmd, utils.RBDPurgeArg,
+		cr.ID, cr.KeyFile, monitor, pool, image)
+	var RBDVolArg []string
+	RBDVolArg = append(RBDVolArg, "-c", cmd)
+	return RBDVolArg
+}
+
+func purgeSnapshot(ctx context.Context, rbdVol *rbdVolume, cr *util.Credentials) (err error) {
+	purgeArgs := buildVolumePurgeArgs(rbdVol.Pool, rbdVol.RbdImageName,
+		rbdVol.Monitors, cr)
+	cmd := exec.Command("bash", purgeArgs...)
+	util.UsefulLog(ctx, "purge: %v", purgeArgs)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		err = fmt.Errorf("rbd: could not purge the volume %v cmd %v output: %s, err: %s, exit code: %d",
+			rbdVol.RbdImageName, purgeArgs, string(out), err.Error(), cmd.ProcessState.ExitCode())
+		util.ErrorLogMsg(err.Error())
+		return err
+	}
+	return
 }
