@@ -120,6 +120,8 @@ type Config struct {
 	SecretName      string
 	SecretNamespace string
 	ClusterId       string
+
+	TrashSchedule string
 }
 
 // ValidateDriverName validates the driver name.

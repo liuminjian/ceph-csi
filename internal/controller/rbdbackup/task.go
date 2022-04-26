@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/ceph/ceph-csi/internal/rbd"
 	"os"
 	"os/exec"
 	"strconv"
@@ -97,21 +98,21 @@ func (b *BackupTask) buildVolumeBackupArgs(backupDest string, pool string, image
 		return RBDVolArg, fmt.Errorf("rbd: invalid backup server address %s", backupDest)
 	}
 
-	// vol := rbd.NewRbdVol(pool, b.monitor, b.clusterId, image)
-	// snapshot, err := vol.GetSnapshotName(cr)
-	// if err != nil {
-	// 	return RBDVolArg, err
-	// }
+	vol := rbd.NewRbdVol(pool, b.monitor, b.clusterId, image)
+	snapshot, err := vol.GetSnapshotName(cr)
+	if err != nil {
+		return RBDVolArg, err
+	}
 
 	timeout := os.Getenv("TIMEOUT")
 	var timeoutInt int
-	timeoutInt, err := strconv.Atoi(timeout)
+	timeoutInt, err = strconv.Atoi(timeout)
 	if err != nil {
 		timeoutInt = 30
 	}
 	remote := fmt.Sprintf(" | gzip | nc -w %d -v %s %s", timeoutInt, bkpAddr[0], bkpAddr[1])
-	cmd := fmt.Sprintf("%s %s %s/%s --id %s --keyfile=%s -m %s - %s", utils.RBDVolCmd, utils.RBDExportArg,
-		pool, image, cr.ID, cr.KeyFile, monitor, remote)
+	cmd := fmt.Sprintf("%s %s %s/%s --id %s --keyfile=%s -m %s - %s", utils.RBDVolCmd, utils.RBDExportDiffArg,
+		pool, snapshot, cr.ID, cr.KeyFile, monitor, remote)
 
 	RBDVolArg = append(RBDVolArg, "-c", cmd)
 

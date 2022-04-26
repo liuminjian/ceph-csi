@@ -19,6 +19,7 @@ require (
 	github.com/onsi/gomega v1.13.0
 	github.com/pborman/uuid v1.2.1
 	github.com/prometheus/client_golang v1.11.0
+	github.com/robfig/cron v1.1.0
 	github.com/stretchr/testify v1.7.0
 	golang.org/x/crypto v0.0.0-20210616213533-5ff15b29337e
 	golang.org/x/sys v0.0.0-20210616094352-59db8d763f22

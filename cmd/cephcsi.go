@@ -19,6 +19,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/ceph/ceph-csi/internal/controller/storageclass"
 	"os"
 	"runtime"
 	"time"
@@ -132,9 +133,10 @@ func init() {
 
 	flag.BoolVar(&conf.Version, "version", false, "Print cephcsi version information")
 	flag.BoolVar(&conf.EnableProfiling, "enableprofiling", false, "enable go profiling")
-	flag.StringVar(&conf.SecretName, "secret name", "csi-rbd-secret", "name of the secret")
-	flag.StringVar(&conf.SecretNamespace, "secret namespace", "kube-system", "name of the secret namespace")
-	flag.StringVar(&conf.ClusterId, "cluster id", "ecx", "name of the cluster id")
+	flag.StringVar(&conf.SecretName, "secretName", "csi-rbd-secret", "name of the secret")
+	flag.StringVar(&conf.SecretNamespace, "secretNamespace", "kube-system", "name of the secret namespace")
+	flag.StringVar(&conf.ClusterId, "clusterId", "ecx", "name of the cluster id")
+	flag.StringVar(&conf.TrashSchedule, "trashSchedule", storageclass.DefaultTrashTime, "ceph trash schedule")
 
 	klog.InitFlags(nil)
 	if err := flag.Set("logtostderr", "true"); err != nil {
@@ -244,6 +246,7 @@ func main() {
 			SecretName:      conf.SecretName,
 			SecretNamespace: conf.SecretNamespace,
 			ClusterId:       conf.ClusterId,
+			ScheduleSpec:    conf.TrashSchedule,
 		}
 		// initialize all controllers before starting.
 		initControllers()
@@ -264,6 +267,7 @@ func initControllers() {
 	persistentvolume.Init()
 	rbdbackup.Init()
 	rbdrestore.Init()
+	storageclass.Init()
 }
 
 func validateCloneDepthFlag(conf *util.Config) {

@@ -18,10 +18,13 @@ const (
 	RBDExportArg            = "export"
 	RBDDUArg                = "du"
 	RBDExportDiffArg        = "export-diff"
+	RBDImportDiffArg        = "import-diff"
 	RBDImportArg            = "import"
 	RBDRenameArg            = "rename"
 	RBDRemoveArg            = "rm"
+	RBDCreateArg            = "create"
 	RBDTrashMoveArg         = "trash move"
+	RBDTrashPurgeArg        = "trash purge"
 	RBDPurgeArg             = "snap purge"
 	RBDFinalizer     string = "rbd.ceph.io/finalizer"
 )

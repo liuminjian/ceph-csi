@@ -50,31 +50,46 @@ func (r *RestoreTask) Start() error {
 	pool := r.restore.Spec.Pool
 	imageName := r.restore.Spec.ImageName
 
-	purgeArgs := r.buildVolumePurgeArgs(pool, imageName, r.monitor, r.cr)
-	cmd := exec.Command("bash", purgeArgs...)
-	util.UsefulLog(r.ctx, "purge: %v", purgeArgs)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		err = fmt.Errorf("rbd: could not purge the volume %v cmd %v output: %s, err: %s, exit code: %d",
-			r.restore.Name, purgeArgs, string(out), err.Error(), cmd.ProcessState.ExitCode())
-		util.ErrorLogMsg(err.Error())
-		if cmd.ProcessState.ExitCode() == 16 {
-			return controller.InUseError{Err: "image already in use"}
-		} else {
-			return err
+	if r.restore.Spec.Recreate {
+		purgeArgs := r.buildVolumePurgeArgs(pool, imageName, r.monitor, r.cr)
+		cmd := exec.Command("bash", purgeArgs...)
+		util.UsefulLog(r.ctx, "purge: %v", purgeArgs)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			err = fmt.Errorf("rbd: could not purge the volume %v cmd %v output: %s, err: %s, exit code: %d",
+				r.restore.Name, purgeArgs, string(out), err.Error(), cmd.ProcessState.ExitCode())
+			util.ErrorLogMsg(err.Error())
+			if cmd.ProcessState.ExitCode() == 16 {
+				return controller.InUseError{Err: "image already in use"}
+			} else if cmd.ProcessState.ExitCode() != 2 {
+				return err
+			}
 		}
-	}
 
-	removeArgs := r.buildVolumeRemoveArgs(pool, imageName, r.monitor, r.cr)
-	cmd = exec.Command("bash", removeArgs...)
-	util.UsefulLog(r.ctx, "restore rm: %v", removeArgs)
-	out, err = cmd.CombinedOutput()
-	if err != nil {
-		err = fmt.Errorf("rbd: could not restore the volume %v cmd %v output: %s, err: %s, exit code: %d",
-			r.restore.Name, removeArgs, string(out), err.Error(), cmd.ProcessState.ExitCode())
-		util.ErrorLogMsg(err.Error())
-		if cmd.ProcessState.ExitCode() == 16 {
-			return controller.InUseError{Err: "image already in use"}
+		removeArgs := r.buildVolumeRemoveArgs(pool, imageName, r.monitor, r.cr)
+		cmd = exec.Command("bash", removeArgs...)
+		util.UsefulLog(r.ctx, "restore rm: %v", removeArgs)
+		out, err = cmd.CombinedOutput()
+		if err != nil {
+			err = fmt.Errorf("rbd: could not restore the volume %v cmd %v output: %s, err: %s, exit code: %d",
+				r.restore.Name, removeArgs, string(out), err.Error(), cmd.ProcessState.ExitCode())
+			util.ErrorLogMsg(err.Error())
+			if cmd.ProcessState.ExitCode() == 16 {
+				return controller.InUseError{Err: "image already in use"}
+			}
+		}
+
+		createArgs := r.buildVolumeCreateArgs(pool, imageName, r.restore.Spec.Size, r.monitor, r.cr)
+		cmd = exec.Command("bash", createArgs...)
+		util.UsefulLog(r.ctx, "create rbd: %v", createArgs)
+		out, err = cmd.CombinedOutput()
+		if err != nil {
+			err = fmt.Errorf("rbd: could not create the volume %v cmd %v output: %s, err: %s, exit code: %d",
+				r.restore.Name, removeArgs, string(out), err.Error(), cmd.ProcessState.ExitCode())
+			util.ErrorLogMsg(err.Error())
+			if cmd.ProcessState.ExitCode() == 16 {
+				return controller.InUseError{Err: "image already in use"}
+			}
 		}
 	}
 
@@ -82,7 +97,7 @@ func (r *RestoreTask) Start() error {
 	if err != nil {
 		return err
 	}
-	cmd = exec.CommandContext(r.ctx, "bash", args...)
+	cmd := exec.CommandContext(r.ctx, "bash", args...)
 	util.UsefulLog(r.ctx, "restore command: %v", args)
 	cmd.Stdout = &r.buf
 	cmd.Stderr = &r.buf
@@ -92,8 +107,8 @@ func (r *RestoreTask) Start() error {
 	}
 	err = cmd.Start()
 	if err != nil {
-		err = fmt.Errorf("rbd: could not restore the volume %v cmd %v output: %s, err: %s",
-			r.restore.Name, args, string(out), err.Error())
+		err = fmt.Errorf("rbd: could not restore the volume %v cmd %v , err: %s",
+			r.restore.Name, args, err.Error())
 		util.ErrorLogMsg(err.Error())
 	}
 	r.isRunning = true
@@ -132,8 +147,8 @@ func (r *RestoreTask) buildVolumeRestoreArgs(restoreSrc string, pool string, ima
 
 	restoreSource := fmt.Sprintf("nc -w %d -v %s %s | gzip -d | ", timeoutInt, rstrAddr[0], rstrAddr[1])
 
-	cmd := fmt.Sprintf("%s %s %s --image-feature layering --id %s --keyfile=%s -m %s - %s/%s",
-		restoreSource, utils.RBDVolCmd, utils.RBDImportArg, cr.ID, cr.KeyFile, monitor, pool, image)
+	cmd := fmt.Sprintf("%s %s %s --id %s --keyfile=%s -m %s - %s/%s",
+		restoreSource, utils.RBDVolCmd, utils.RBDImportDiffArg, cr.ID, cr.KeyFile, monitor, pool, image)
 
 	RBDVolArg = append(RBDVolArg, "-c", cmd)
 
@@ -153,6 +168,15 @@ func (r *RestoreTask) buildVolumePurgeArgs(pool string, image string, monitor st
 	cr *util.Credentials) []string {
 	cmd := fmt.Sprintf("%s %s --id %s --keyfile=%s -m %s %s/%s", utils.RBDVolCmd, utils.RBDPurgeArg,
 		cr.ID, cr.KeyFile, monitor, pool, image)
+	var RBDVolArg []string
+	RBDVolArg = append(RBDVolArg, "-c", cmd)
+	return RBDVolArg
+}
+
+func (r *RestoreTask) buildVolumeCreateArgs(pool string, image string, size int64, monitor string,
+	cr *util.Credentials) []string {
+	cmd := fmt.Sprintf("%s %s --id %s --keyfile=%s -m %s -s %dG %s/%s --image-feature layering",
+		utils.RBDVolCmd, utils.RBDCreateArg, cr.ID, cr.KeyFile, monitor, size/1024/1024/1024, pool, image)
 	var RBDVolArg []string
 	RBDVolArg = append(RBDVolArg, "-c", cmd)
 	return RBDVolArg

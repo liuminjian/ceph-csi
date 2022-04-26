@@ -43,6 +43,12 @@ type RBDRestoreSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:Pattern="^([0-9]+.[0-9]+.[0-9]+.[0-9]+:[0-9]+)$"
 	RestoreSrc string `json:"restoreSrc"`
+
+	// Recreate indicates whether recreate rbd is needed
+	Recreate bool `json:"recreate,omitempty"`
+
+	// Size indicates rbd recreate size
+	Size int64 `json:"size,omitempty"`
 }
 
 // RBDRestoreStatus defines the observed state of RBDRestore

@@ -17,7 +17,6 @@ package controller
 
 import (
 	"fmt"
-
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/ceph/ceph-csi/internal/util"
@@ -41,6 +40,7 @@ type Config struct {
 	SecretName      string
 	SecretNamespace string
 	ClusterId       string
+	ScheduleSpec    string
 }
 
 // ControllerList holds the list of managers need to be started.
